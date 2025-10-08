@@ -2,13 +2,13 @@
   "domain": "rinnai",
   "name": "Rinnai",
   "codeowners": [
-    "@palafin02back"
+    "@seno"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/palafin02back/rinnai_integration",
-  "issue_tracker": "https://github.com/palafin02back/rinnai_integration/issues",
+  "documentation": "https://github.com/kaattz/rinnai_integration",
+  "issue_tracker": "https://github.com/kaattz/rinnai_integration/issues",
   "iot_class": "cloud_push",
   "quality_scale": "bronze",
   "requirements": ["paho-mqtt>=1.6.1"],
-  "version": "v0.0.1"
+  "version": "v0.0.2"
 }

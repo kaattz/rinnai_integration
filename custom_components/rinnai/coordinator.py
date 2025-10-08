@@ -8,18 +8,32 @@ import logging
 import time
 from typing import Any, ClassVar
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import RinnaiClient
-from .const import BURNING_STATES, CODE_TO_MODE, DOMAIN, GAS_CONSUMPTION_MAX_DIGITS
+from .const import BURNING_STATES, CODE_TO_MODE, DOMAIN, parse_reb_operation_mode, parse_switch_flag
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
-STORAGE_KEY = f"{DOMAIN}.energy_data"
+
+def _convert_water_pressure(value: Any) -> float:
+    """Convert hex encoded water pressure to bar."""
+    if value in (None, ""):
+        return 0.0
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return 0.0
+            converted = int(value, 16)
+        else:
+            converted = int(value)
+    except (ValueError, TypeError):
+        _LOGGER.warning("Failed to convert water pressure value: %s", value)
+        return 0.0
+    return round(converted / 1000.0, 3)
 
 
 @dataclass
@@ -30,92 +44,51 @@ class RinnaiDeviceState:
     operation_mode: str = ""
     # Hot water temperature setting (target) in celsius
     hot_water_temp: int = 0
-    # Normal mode heating temperature in celsius
-    heating_temp_nm: int = 0
-    # Energy saving mode heating temperature in celsius
-    heating_temp_hes: int = 0
-    # Current burning state (on/off/standby)
-    burning_state: str = ""
-    # Room temperature control setting
-    room_temp_control: int = 0
-    # Heating output water temperature control
-    heating_water_temp_control: int = 0
-    # Heating reservation mode
-    heating_reservation_mode: str = ""
-    # Last check point
-    last_check_point: str = ""
-    # Byte string
-    byte_string: str = ""
-
-    # Energy usage data
-    gas_used: float = 0.0
-    supply_time: int = 0
-    # New energy usage data fields
-    total_power_supply_time: int = 0
-    total_heating_burning_time: int = 0
-    total_hot_water_burning_time: int = 0
-    heating_burning_times: int = 0
-    hot_water_burning_times: int = 0
+    # General heating temperature setting in celsius
+    heating_temp: int = 0
+    # Domestic hot water burning state (DHW)
+    burning_state_dhw: str = ""
+    # Central heating burning state (CH)
+    burning_state_ch: str = ""
+    # Temperature unit flag reported by device
+    temperature_unit: str = ""
+    # Water pressure unit flag reported by device
+    water_pressure_unit: str = ""
+    # Current water pressure in bar
+    water_pressure: float = 0.0
+    # Raw temperature bound values from device
+    hot_water_temp_bound_raw: str = ""
+    heating_temp_bound_raw: str = ""
+    # Derived hot water temperature range
+    hot_water_temp_min: int = 0
+    hot_water_temp_max: int = 0
+    # Derived heating temperature range
+    heating_temp_min: int = 0
+    heating_temp_max: int = 0
+    eco_mode: bool | None = None
 
     # Raw data from device
     raw_data: dict[str, Any] = field(default_factory=dict)
 
     # Field mapping between API fields and object properties
     _field_mapping: ClassVar[dict[str, tuple[str, type | None]]] = {
-        # Standard API field mapping
         "operationMode": ("operation_mode", None),
         "hotWaterTempSetting": ("hot_water_temp", None),
-        "heatingTempSettingNM": ("heating_temp_nm", None),
-        "heatingTempSettingHES": ("heating_temp_hes", None),
-        "burningState": ("burning_state", None),
-        "roomTempControl": ("room_temp_control", None),
-        "heatingOutWaterTempControl": ("heating_water_temp_control", None),
-        "heatingReservationMode": ("heating_reservation_mode", None),
-        "gasUsed": ("gas_used", float),
-        "supplyTime": ("supply_time", int),
-        "byteStr": ("byte_string", None),
-        "lastCheckPoint": ("last_check_point", None),
-        # Energy related raw field mapping
-        "gasConsumption": (
-            "gas_used",
-            float,
-        ),  # Hex gas consumption that needs special handling
-        "actualUseTime": ("supply_time", int),  # Hex supply time
-        "totalPowerSupplyTime": (
-            "total_power_supply_time",
-            int,
-        ),  # Hex total power supply time
-        "totalHeatingBurningTime": (
-            "total_heating_burning_time",
-            int,
-        ),  # Hex total heating burning time
-        "totalHotWaterBurningTime": (
-            "total_hot_water_burning_time",
-            int,
-        ),  # Hex total hot water burning time
-        "heatingBurningTimes": (
-            "heating_burning_times",
-            int,
-        ),  # Hex heating burning times
-        "hotWaterBurningTimes": (
-            "hot_water_burning_times",
-            int,
-        ),  # Hex hot water burning times
+        "heatingTempSetting": ("heating_temp", None),
+        "burningStateDHW": ("burning_state_dhw", None),
+        "burningStateCH": ("burning_state_ch", None),
+        "temperatureUnit": ("temperature_unit", None),
+        "waterPressureUnit": ("water_pressure_unit", None),
+        "waterPressure": ("water_pressure", _convert_water_pressure),
+        "hotWaterTempBound": ("hot_water_temp_bound_raw", None),
+        "heatingTempBound": ("heating_temp_bound_raw", None),
+        "ecoMode": ("eco_mode", parse_switch_flag),
     }
 
     # List of fields that need hex conversion
     _hex_fields: ClassVar[list[str]] = [
         "hotWaterTempSetting",
-        "heatingTempSettingNM",
-        "heatingTempSettingHES",
-        "roomTempControl",
-        "heatingOutWaterTempControl",
-        "actualUseTime",
-        "totalPowerSupplyTime",
-        "totalHeatingBurningTime",
-        "totalHotWaterBurningTime",
-        "heatingBurningTimes",
-        "hotWaterBurningTimes",
+        "heatingTempSetting",
     ]
 
     def update_from_api_data(self, api_data: dict[str, Any]) -> None:
@@ -126,29 +99,32 @@ class RinnaiDeviceState:
         # Process hex values
         self._process_hex_values(api_data)
 
-        # Process special gas consumption data
-        self._process_gas_consumption(api_data)
-
         # Update typed fields using mapping
         for api_field, (obj_field, converter) in self._field_mapping.items():
-            if api_field in api_data:
-                value = api_data[api_field]
+            if api_field not in api_data:
+                continue
 
-                if not value:
+            value = api_data[api_field]
+            if value in (None, ""):
+                continue
+
+            if converter:
+                try:
+                    converted = converter(value)
+                except (ValueError, TypeError):
+                    _LOGGER.warning(
+                        "Failed to convert %s value '%s' to %s",
+                        obj_field,
+                        value,
+                        converter.__name__,
+                    )
                     continue
+                setattr(self, obj_field, converted)
+                api_data[api_field] = converted
+            else:
+                setattr(self, obj_field, value)
 
-                if converter:
-                    try:
-                        setattr(self, obj_field, converter(value))
-                    except (ValueError, TypeError):
-                        _LOGGER.warning(
-                            "Failed to convert %s value '%s' to %s",
-                            obj_field,
-                            value,
-                            converter.__name__,
-                        )
-                else:
-                    setattr(self, obj_field, value)
+        self._apply_derived_values()
 
     def _process_hex_values(self, api_data: dict[str, Any]) -> None:
         """Process values that need hex conversion."""
@@ -172,35 +148,56 @@ class RinnaiDeviceState:
                         "Failed to convert hex value %s: %s", field_name, hex_value
                     )
 
-    def _process_gas_consumption(self, api_data: dict[str, Any]) -> None:
-        if gas_value := api_data.get("gasConsumption"):
-            try:
-                if isinstance(gas_value, str):
-                    # Get last N characters to handle common format issues
-                    # Rinnai seems to send very long strings with leading zeros
-                    if len(gas_value) > GAS_CONSUMPTION_MAX_DIGITS:
-                        gas_value = gas_value[-GAS_CONSUMPTION_MAX_DIGITS:]
+    def _apply_derived_values(self) -> None:
+        """Update derived fields such as temperature ranges."""
+        bounds = self._decode_temperature_bound(self.hot_water_temp_bound_raw)
+        if bounds:
+            self.hot_water_temp_min, self.hot_water_temp_max = bounds
+        bounds = self._decode_temperature_bound(self.heating_temp_bound_raw)
+        if bounds:
+            self.heating_temp_min, self.heating_temp_max = bounds
 
-                    # Convert hex string to integer - using int() for small enough values
-                    gas_int = int(gas_value, 16)
+        operation_raw = self.raw_data.get("operationMode", self.operation_mode)
+        mode_key, flags = parse_reb_operation_mode(operation_raw)
+        if operation_raw not in (None, ""):
+            if isinstance(operation_raw, str):
+                self.raw_data["operationModeRaw"] = operation_raw
+            else:
+                try:
+                    self.raw_data["operationModeRaw"] = f"{int(operation_raw):06X}"
+                except (TypeError, ValueError):
+                    self.raw_data["operationModeRaw"] = str(operation_raw)
+        if flags:
+            self.raw_data["operationModeFlags"] = flags
+            if "eco_mode" in flags:
+                self.eco_mode = flags["eco_mode"]
+        if mode_key:
+            self.operation_mode = mode_key
 
-                    # Convert to cubic meters (divide by 1000)
-                    gas_consumption = float(gas_int) / 10000.0
-                    self.gas_used = round(gas_consumption, 2)
+    @staticmethod
+    def _decode_temperature_bound(bound: str | int | None) -> tuple[int, int] | None:
+        """Decode Rinnai two-byte bound format (high byte max, low byte min)."""
+        if bound in (None, ""):
+            return None
+        if isinstance(bound, int):
+            value = f"{bound:04X}"
+        elif isinstance(bound, str):
+            value = bound.strip()
+            if len(value) < 4:
+                return None
+            value = value[-4:]
+        else:
+            return None
+        try:
+            upper = int(value[:2], 16)
+            lower = int(value[2:4], 16)
+        except ValueError:
+            return None
+        if lower > upper:
+            lower, upper = upper, lower
+        return lower, upper
 
-                    # Update gasUsed field in api_data
-                    api_data["gasUsed"] = self.gas_used
-                    _LOGGER.debug(
-                        "Processed gas consumption: %s -> %s m³",
-                        gas_value,
-                        self.gas_used,
-                    )
-            except ValueError as e:
-                _LOGGER.warning(
-                    "Failed to process gas consumption value: %s (%s)",
-                    gas_value,
-                    str(e),
-                )
+
 
 
 @dataclass
@@ -252,66 +249,11 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=update_interval),
         )
         self.client = client
+        self.client.register_state_listener(self._handle_client_state_update)
         self._first_update = True
         self._devices: dict[str, RinnaiDevice] = {}
         self._last_http_update: dict[str, float] = {}
         self.data = {"devices": {}, "device_states": {}}
-
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-
-        hass.create_task(self._load_energy_data())
-
-    async def _load_energy_data(self) -> None:
-        """Load saved energy data from storage."""
-        try:
-            if saved_data := await self._store.async_load():
-                for device_id, energy_data in saved_data.items():
-                    if device := self._devices.get(device_id):
-                        device.state.gas_used = energy_data.get("gas_used", 0.0)
-                        device.state.supply_time = energy_data.get("supply_time", 0)
-                        device.state.total_power_supply_time = energy_data.get(
-                            "total_power_supply_time", 0
-                        )
-                        device.state.total_heating_burning_time = energy_data.get(
-                            "total_heating_burning_time", 0
-                        )
-                        device.state.total_hot_water_burning_time = energy_data.get(
-                            "total_hot_water_burning_time", 0
-                        )
-                        device.state.heating_burning_times = energy_data.get(
-                            "heating_burning_times", 0
-                        )
-                        device.state.hot_water_burning_times = energy_data.get(
-                            "hot_water_burning_times", 0
-                        )
-                        device.state.raw_data.update(energy_data)
-
-                        _LOGGER.debug(
-                            "Loaded saved energy data for device %s", device_id
-                        )
-        except (ValueError, TypeError, KeyError) as err:
-            _LOGGER.error("Error loading energy data: %s", err)
-
-    async def _save_energy_data(self) -> None:
-        """Save energy data to storage."""
-        try:
-            energy_data = {}
-            for device_id, device in self._devices.items():
-                state = device.state
-                energy_data[device_id] = {
-                    "gas_used": state.gas_used,
-                    "supply_time": state.supply_time,
-                    "total_power_supply_time": state.total_power_supply_time,
-                    "total_heating_burning_time": state.total_heating_burning_time,
-                    "total_hot_water_burning_time": state.total_hot_water_burning_time,
-                    "heating_burning_times": state.heating_burning_times,
-                    "hot_water_burning_times": state.hot_water_burning_times,
-                }
-
-            await self._store.async_save(energy_data)
-            _LOGGER.debug("Saved energy data for all devices")
-        except (ValueError, TypeError, KeyError) as err:
-            _LOGGER.error("Error saving energy data: %s", err)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via API."""
@@ -332,7 +274,6 @@ class RinnaiCoordinator(DataUpdateCoordinator):
                 if not await self.client.fetch_devices():
                     _LOGGER.warning("Failed to fetch devices from HTTP API")
 
-                # 初始化时，获取每个设备的状态
                 for device_id in self.client.devices:
                     _LOGGER.debug("Fetching initial state for device: %s", device_id)
                     if not await self.client.fetch_device_state(device_id):
@@ -347,10 +288,8 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.debug("Skipping HTTP device fetch, using MQTT data only")
 
-                # 对于没有 MQTT 更新或超过一定时间未更新的设备，强制从 HTTP API 获取状态
                 current_time = time.time()
                 for device_id in self.client.devices:
-                    # 检查设备状态是否为空或上次更新时间是否超过阈值
                     device_state = self.client.device_states.get(device_id, {})
                     if (
                         not device_state
@@ -361,14 +300,12 @@ class RinnaiCoordinator(DataUpdateCoordinator):
                             "Fetching HTTP state update for device: %s", device_id
                         )
                         if await self.client.fetch_device_state(device_id):
-                            # 更新最后 HTTP 获取时间
                             self._last_http_update[device_id] = current_time
 
                 # MQTT updates happen independently in the client through subscriptions
                 # Process any state updates from MQTT
                 self._process_device_states()
 
-            # 打印设备状态详细信息
             self._log_device_states()
 
         except (ValueError, TypeError, KeyError) as err:
@@ -384,6 +321,12 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             "raw_devices": self.client.devices,
             "raw_device_states": self.client.device_states,
         }
+
+    @callback
+    def _handle_client_state_update(self, device_id: str, _: dict[str, Any]) -> None:
+        """Handle state updates pushed from the client."""
+        self._process_device_states()
+        self.async_set_updated_data(self.data)
 
     def _process_devices_data(self) -> None:
         """Process devices data from client into structured format."""
@@ -411,8 +354,6 @@ class RinnaiCoordinator(DataUpdateCoordinator):
 
                 self._devices[device_id].state.update_from_api_data(state_data)
 
-                # 保存能源数据
-                self.hass.create_task(self._save_energy_data())
             else:
                 _LOGGER.warning(
                     "Received state for unknown device %s, fetching device info",
@@ -435,7 +376,6 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         # If command was successful, update our internal state anticipating the change
         # This improves responsiveness of the UI before the next MQTT update
         if result and device_id in self._devices:
-            # 获取当前设备状态
             device = self._devices[device_id]
             old_state = device.state
 
@@ -446,16 +386,13 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             # update data to coordinator
             self.async_set_updated_data(self.data)
 
-            # 更新协调器的数据结构，确保引用正确
             self.data["device_states"][device_id] = self._devices[device_id].state
 
-            # 记录命令后的状态
             device = self._devices[device_id]
             state = device.state
             _LOGGER.info("===== Command Post-State =====")
             _LOGGER.info("Device: %s (%s)", device.device_name, device_id)
 
-            # 记录模式变化
             new_operation_mode = state.operation_mode
             if old_operation_mode != new_operation_mode:
                 _LOGGER.info(
@@ -500,56 +437,43 @@ class RinnaiCoordinator(DataUpdateCoordinator):
                 device.online,
             )
             _LOGGER.info(
-                "Type: %s, Auth Code: %s", device.device_type, device.auth_code
+                "Type: %s, Auth Code: %s",
+                device.device_type,
+                device.auth_code,
             )
 
-            # Log basic status information
-            _LOGGER.info("Basic Status:")
-            _LOGGER.info(
-                "  Operation Mode: %s (Code: %s)",
-                CODE_TO_MODE[state.operation_mode],
-                state.operation_mode,
-            )
-            _LOGGER.info("  Burning State: %s", BURNING_STATES[state.burning_state])
-            _LOGGER.info("  Hot Water Temperature Setting: %s°C", state.hot_water_temp)
-            _LOGGER.info("  Heating Temperature (Normal): %s°C", state.heating_temp_nm)
-            _LOGGER.info(
-                "  Heating Temperature (Energy Saving): %s°C", state.heating_temp_hes
-            )
+            mode_name = CODE_TO_MODE.get(state.operation_mode, state.operation_mode)
+            _LOGGER.info("Operation Mode: %s", mode_name)
+            _LOGGER.info("Hot Water Temperature Setting: %s C", state.hot_water_temp)
+            _LOGGER.info("Heating Temperature Setting: %s C", state.heating_temp)
 
-            # Log control parameters
-            _LOGGER.info("Control Parameters:")
-            _LOGGER.info("  Room Temperature Control: %s", state.room_temp_control)
-            _LOGGER.info(
-                "  Heating Output Water Temperature Control: %s",
-                state.heating_water_temp_control,
-            )
-            _LOGGER.info("  Reservation Mode: %s", state.heating_reservation_mode)
+            if state.hot_water_temp_min or state.hot_water_temp_max:
+                _LOGGER.info(
+                    "Hot Water Temperature Range: %s-%s C",
+                    state.hot_water_temp_min,
+                    state.hot_water_temp_max,
+                )
+            if state.heating_temp_min or state.heating_temp_max:
+                _LOGGER.info(
+                    "Heating Temperature Range: %s-%s C",
+                    state.heating_temp_min,
+                    state.heating_temp_max,
+                )
 
-            # Log energy usage data
-            _LOGGER.info("Energy Data:")
-            _LOGGER.info("  Gas Usage: %.3f m³", state.gas_used)
-            _LOGGER.info("  Supply Time: %.2f hours", state.supply_time)
-            _LOGGER.info(
-                "  Total Power Supply Time: %.2f hours",
-                state.total_power_supply_time,
-            )
-            _LOGGER.info(
-                "  Total Heating Burning Time: %.2f hours",
-                state.total_heating_burning_time,
-            )
-            _LOGGER.info(
-                "  Total Hot Water Burning Time: %.2f hours",
-                state.total_hot_water_burning_time,
-            )
-            _LOGGER.info(
-                "  Heating Burning Times: %s times", state.heating_burning_times
-            )
-            _LOGGER.info(
-                "  Hot Water Burning Times: %s times", state.hot_water_burning_times
-            )
+            if state.burning_state_dhw:
+                _LOGGER.info(
+                    "DHW Burning State: %s",
+                    BURNING_STATES.get(state.burning_state_dhw, state.burning_state_dhw),
+                )
+            if state.burning_state_ch:
+                _LOGGER.info(
+                    "CH Burning State: %s",
+                    BURNING_STATES.get(state.burning_state_ch, state.burning_state_ch),
+                )
 
-            # Log raw data
+            if state.water_pressure:
+                _LOGGER.info("Water Pressure: %.3f bar", state.water_pressure)
+
             _LOGGER.debug("Device Raw Data: %s", device.raw_data)
             _LOGGER.debug("State Raw Data: %s", state.raw_data)
             _LOGGER.info("===========================")

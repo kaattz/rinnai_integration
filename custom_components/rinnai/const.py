@@ -1,6 +1,6 @@
 """Constants for the Rinnai integration."""
 
-from typing import Final
+from typing import Any, Final
 
 # Integration domain
 DOMAIN: Final = "rinnai"
@@ -12,28 +12,16 @@ CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_CONNECT_TIMEOUT: Final = "connect_timeout"
 
 # Data processing configuration
-GAS_CONSUMPTION_MAX_DIGITS: Final = 8  # Use last 8 digits of gas consumption hex value
 
 # Attributes and service names
 ATTR_HOT_WATER_TEMP: Final = "hot_water_temperature"
-ATTR_HEATING_TEMP_NM: Final = "heating_temperature_nm"
-ATTR_HEATING_TEMP_HES: Final = "heating_temperature_hes"
-ATTR_ENERGY_SAVING_MODE: Final = "energy_saving_mode"
-ATTR_OUTDOOR_MODE: Final = "outdoor_mode"
-ATTR_RAPID_HEATING: Final = "rapid_heating"
-ATTR_SUMMER_WINTER: Final = "summer_winter"
-ATTR_GAS_USAGE: Final = "gas_usage"
-ATTR_SUPPLY_TIME: Final = "supply_time"
-ATTR_BURNING_STATE: Final = "burning_state"
-# 新增属性常量
-ATTR_TOTAL_POWER_SUPPLY_TIME: Final = "total_power_supply_time"
-ATTR_TOTAL_HEATING_BURNING_TIME: Final = "total_heating_burning_time"
-ATTR_TOTAL_HOT_WATER_BURNING_TIME: Final = "total_hot_water_burning_time"
-ATTR_HEATING_BURNING_TIMES: Final = "heating_burning_times"
-ATTR_HOT_WATER_BURNING_TIMES: Final = "hot_water_burning_times"
+ATTR_HEATING_TEMP: Final = "heating_temperature"
+ATTR_BURNING_STATE_DHW: Final = "burning_state_dhw"
+ATTR_BURNING_STATE_CH: Final = "burning_state_ch"
+ATTR_WATER_PRESSURE: Final = "water_pressure"
 
 # Supported platforms
-PLATFORMS: Final = frozenset(["sensor", "water_heater", "climate"])
+PLATFORMS: Final = frozenset(["sensor", "water_heater", "climate", "switch"])
 
 # Default values
 DEFAULT_UPDATE_INTERVAL: Final = 300  # seconds
@@ -42,6 +30,15 @@ DEFAULT_CONNECT_TIMEOUT: Final = 30  # seconds
 # Rinnai MQTT settings
 RINNAI_HOST: Final = "mqtt.rinnai.com.cn"
 RINNAI_PORT: Final = 8883
+
+DEFAULT_AUTH_CODE: Final = "03F2"
+DEVICE_DEFAULT_AUTH_CODES: Final = {
+    "REB": "03F2",
+}
+
+#ECO_MODE values
+ECO_MODE_ON_VALUE: Final = "31"
+ECO_MODE_OFF_VALUE: Final = "31"
 
 # Device type identifiers
 DEVICE_TYPE_WATER_HEATER: Final = "water_heater"
@@ -55,52 +52,42 @@ MIN_TEMP: Final = 35
 MAX_TEMP: Final = 65
 TEMP_STEP: Final = 1
 
-# 模式映射定义
+# Mode mapping definitions
 HEATING_MODES: Final = {
-    # Mode name: {display: display name, codes: [mode code list], command: command name, value: command value, requires_normal: whether need to switch to normal mode first}
     "normal": {
         "display": "Normal Heating",
-        "codes": ["3"],
-        "command": "summerWinter",
+        "codes": ["normal"],
+        "command": "heatingSwitch",
         "value": "31",
+        "off_command": "heatingSwitch",
+        "off_value": "31",
         "requires_normal": False,
-    },
-    "energy_saving": {
-        "display": "Heating Energy Saving",
-        "codes": ["B", "4B"],
-        "command": "energySavingMode",
-        "value": "31",
-        "requires_normal": True,
     },
     "outdoor": {
         "display": "Heating Outdoor",
-        "codes": ["13", "53"],
+        "codes": ["outdoor"],
         "command": "outdoorMode",
         "value": "31",
+        "off_command": "outdoorMode",
+        "off_value": "30",
         "requires_normal": True,
     },
     "rapid": {
         "display": "Fast Heating",
-        "codes": ["43", "4B", "53", "63"],
+        "codes": ["rapid"],
         "command": "rapidHeating",
         "value": "31",
+        "off_command": "rapidHeating",
+        "off_value": "30",
         "requires_normal": True,
     },
     "standby": {
         "display": "Heating Off",
-        "codes": ["0", "1", "2"],
-        "command": "summerWinter",
+        "codes": ["standby"],
+        "command": "heatingSwitch",
         "value": "31",
         "requires_normal": False,
     },
-    # Temporarily hide scheduled mode
-    # "scheduled": {
-    #     "display": "Heating Scheduled",
-    #     "codes": ["23", "63"],
-    #     "command": "scheduledMode",
-    #     "value": "31",
-    #     "requires_normal": True,
-    # },
 }
 
 # Map mode codes to mode names
@@ -110,7 +97,6 @@ CODE_TO_MODE: Final = {
 
 # Extract various mode code lists for helper functions
 NORMAL_HEATING_CODES: Final = HEATING_MODES["normal"]["codes"]
-ENERGY_SAVING_CODES: Final = HEATING_MODES["energy_saving"]["codes"]
 OUTDOOR_MODES_CODES: Final = HEATING_MODES["outdoor"]["codes"]
 RAPID_HEATING_CODES: Final = HEATING_MODES["rapid"]["codes"]
 HEATING_OFF_MODES_CODES: Final = HEATING_MODES["standby"]["codes"]
@@ -123,6 +109,59 @@ BURNING_STATES: Final = {
     "33": "Error",
 }
 
+def parse_switch_flag(value: Any) -> bool:
+    """Convert Rinnai on/off string values (31/30) to boolean."""
+    if value in (None, ""):
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"31", "1", "on", "true"}:
+            return True
+        if normalized in {"30", "0", "off", "false"}:
+            return False
+        if normalized.startswith("0x"):
+            try:
+                return int(normalized, 16) != 0
+            except ValueError:
+                return False
+        return normalized not in {"", "0"}
+    if isinstance(value, (int, float)):
+        return int(value) != 0
+    return bool(value)
+REB_OPERATION_MODE_FLAGS: Final = {
+    "heating_enabled": 0x010000,
+    "rapid_heating": 0x000100,
+    "eco_mode": 0x400000,
+    "outdoor_mode": 0x800000,
+}
+
+def parse_reb_operation_mode(value: str | int | None) -> tuple[str, dict[str, bool]]:
+    """Parse REB operationMode value into mode key and flag mapping."""
+    if value in (None, ""):
+        return "standby", {}
+    try:
+        raw_int = int(value, 16) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return "standby", {}
+
+    flags = {
+        "heating_enabled": bool(raw_int & REB_OPERATION_MODE_FLAGS["heating_enabled"]),
+        "rapid_heating": bool(raw_int & REB_OPERATION_MODE_FLAGS["rapid_heating"]),
+        "eco_mode": bool(raw_int & REB_OPERATION_MODE_FLAGS["eco_mode"]),
+        "outdoor_mode": bool(raw_int & REB_OPERATION_MODE_FLAGS["outdoor_mode"]),
+    }
+
+    if flags["outdoor_mode"]:
+        mode_key = "outdoor"
+    elif flags["rapid_heating"]:
+        mode_key = "rapid"
+    elif flags["heating_enabled"]:
+        mode_key = "normal"
+    else:
+        mode_key = "standby"
+
+    return mode_key, flags
+
 HOST: Final = "https://iot.rinnai.com.cn/app"
 LOGIN_URL: Final = f"{HOST}/V1/login"
 INFO_URL: Final = f"{HOST}/V1/device/list"
@@ -134,29 +173,18 @@ REFESH_TIME: Final = 86400  # 24 hours
 # State parameters
 STATE_PARAMETERS: Final = {
     "operationMode",
-    "roomTempControl",
-    "heatingOutWaterTempControl",
-    "burningState",
     "hotWaterTempSetting",
-    "heatingTempSettingNM",
-    "heatingTempSettingHES",
+    "heatingTempSetting",
+    "burningStateDHW",
+    "burningStateCH",
+    "temperatureUnit",
+    "waterPressureUnit",
+    "waterPressure",
+    "hotWaterTempBound",
+    "heatingTempBound",
 }
 
-
 # Helper methods - for unified state determination
-def is_energy_saving_mode(operation_mode: str) -> bool:
-    """Determine if the mode is energy saving. Can handle text status or numeric code."""
-    if not operation_mode:
-        return False
-
-    # If it's text status
-    if "Energy Saving" in operation_mode:
-        return True
-
-    # If it's numeric code, check if it's in energy saving mode codes
-    return operation_mode in ENERGY_SAVING_CODES
-
-
 def is_outdoor_mode(operation_mode: str) -> bool:
     """Determine if the mode is outdoor mode. Can handle text status or numeric code."""
     if not operation_mode:

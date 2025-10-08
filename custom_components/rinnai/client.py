@@ -15,7 +15,15 @@ import aiohttp
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import AK, INFO_URL, LOGIN_URL, PROCESS_PARAMETER_URL, REFESH_TIME
+from .const import (
+    AK,
+    DEFAULT_AUTH_CODE,
+    DEVICE_DEFAULT_AUTH_CODES,
+    INFO_URL,
+    LOGIN_URL,
+    PROCESS_PARAMETER_URL,
+    REFESH_TIME,
+)
 from .mqtt_client import RinnaiMQTTClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +61,7 @@ class RinnaiClient:
         self.device_states: dict[str, dict[str, Any]] = {}
 
         # Callbacks
-        self._state_callbacks: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+        self._state_callbacks: dict[str, list[Callable[[str, dict[str, Any]], None]]] = {}
 
         # Initialize custom MQTT client
         self._mqtt_client = RinnaiMQTTClient(hass, self.username, self.password_hash)
@@ -216,6 +224,21 @@ class RinnaiClient:
 
         self.device_states[device_id].update(state_data)
 
+        callbacks = list(self._state_callbacks.get(device_id, []))
+        callbacks += self._state_callbacks.get("__all__", [])
+        for callback in callbacks:
+            try:
+                callback(device_id, self.device_states[device_id])
+            except Exception as err:  # pragma: no cover
+                _LOGGER.exception("State callback error: %s", err)
+
+    def register_state_listener(
+        self, callback: Callable[[str, dict[str, Any]], None], device_id: str | None = None
+    ) -> None:
+        """Register a callback for state updates."""
+        key = device_id or "__all__"
+        self._state_callbacks.setdefault(key, []).append(callback)
+
     async def _setup_mqtt_for_device(self, device_id: str) -> None:
         """Set up MQTT subscriptions for a device."""
         if not self._mqtt_client.connected:
@@ -336,7 +359,14 @@ class RinnaiClient:
             return False
 
         device_data = self.devices[device_id]
-        auth_code = device_data.get("authCode", "03F1")
+        auth_code = device_data.get("authCode")
+        if not auth_code:
+            device_type = str(device_data.get("deviceType", "")).strip().upper()
+            auth_code = DEFAULT_AUTH_CODE
+            for model_prefix, model_code in DEVICE_DEFAULT_AUTH_CODES.items():
+                if device_type.startswith(model_prefix):
+                    auth_code = model_code
+                    break
         device_mac = device_data.get("mac")
         if not device_mac:
             _LOGGER.error("No MAC address for device %s", device_id)

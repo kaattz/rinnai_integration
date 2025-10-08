@@ -14,25 +14,18 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature, UnitOfTime
+from homeassistant.const import UnitOfPressure, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    ATTR_BURNING_STATE,
-    ATTR_GAS_USAGE,
-    ATTR_HEATING_BURNING_TIMES,
-    ATTR_HEATING_TEMP_HES,
-    ATTR_HEATING_TEMP_NM,
-    ATTR_HOT_WATER_BURNING_TIMES,
+    ATTR_BURNING_STATE_CH,
+    ATTR_BURNING_STATE_DHW,
+    ATTR_HEATING_TEMP,
     ATTR_HOT_WATER_TEMP,
-    ATTR_SUPPLY_TIME,
-    ATTR_TOTAL_HEATING_BURNING_TIME,
-    ATTR_TOTAL_HOT_WATER_BURNING_TIME,
-    ATTR_TOTAL_POWER_SUPPLY_TIME,
-    CODE_TO_MODE,
+    ATTR_WATER_PRESSURE,
     DOMAIN,
     get_burning_state_ha,
 )
@@ -59,104 +52,44 @@ SENSOR_TYPES: Final[tuple[RinnaiSensorEntityDescription, ...]] = (
         value_fn=lambda _, state: state.hot_water_temp if state else 0,
     ),
     RinnaiSensorEntityDescription(
-        key=ATTR_HEATING_TEMP_NM,
-        translation_key="heating_temperature_nm",
-        name="Heating Temperature (Normal Mode)",
+        key=ATTR_HEATING_TEMP,
+        translation_key="heating_temperature",
+        name="Heating Temperature",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda _, state: state.heating_temp_nm if state else 0,
+        value_fn=lambda _, state: state.heating_temp if state else 0,
     ),
     RinnaiSensorEntityDescription(
-        key=ATTR_HEATING_TEMP_HES,
-        translation_key="heating_temperature_hes",
-        name="Heating Temperature (Energy Saving)",
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        device_class=SensorDeviceClass.TEMPERATURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda _, state: state.heating_temp_hes if state else 0,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_BURNING_STATE,
-        translation_key="burning_state",
-        name="Burning State",
+        key=ATTR_BURNING_STATE_DHW,
+        translation_key="burning_state_dhw",
+        name="DHW Burning State",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda _, state: get_burning_state_ha(
-            state.burning_state if state else "Standby"
+            state.burning_state_dhw if state else "Standby"
         ),
     ),
     RinnaiSensorEntityDescription(
-        key=ATTR_GAS_USAGE,
-        translation_key="gas_usage",
-        name="Gas Usage",
+        key=ATTR_BURNING_STATE_CH,
+        translation_key="burning_state_ch",
+        name="CH Burning State",
         entity_category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.GAS,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement="m³",
-        value_fn=lambda _, state: state.gas_used if state else None,
+        value_fn=lambda _, state: get_burning_state_ha(
+            state.burning_state_ch if state else "Standby"
+        ),
     ),
     RinnaiSensorEntityDescription(
-        key=ATTR_SUPPLY_TIME,
-        translation_key="supply_time",
-        name="Supply Time",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.DURATION,
-        native_unit_of_measurement=UnitOfTime.HOURS,
-        value_fn=lambda _, state: round(state.supply_time, 2) if state else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_TOTAL_POWER_SUPPLY_TIME,
-        translation_key="total_power_supply_time",
-        name="Total Power Supply Time",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement=UnitOfTime.HOURS,
-        value_fn=lambda _, state: round(state.total_power_supply_time, 2)
-        if state
-        else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_TOTAL_HEATING_BURNING_TIME,
-        translation_key="total_heating_burning_time",
-        name="Total Heating Burning Time",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement=UnitOfTime.HOURS,
-        value_fn=lambda _, state: round(state.total_heating_burning_time, 2)
-        if state
-        else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_TOTAL_HOT_WATER_BURNING_TIME,
-        translation_key="total_hot_water_burning_time",
-        name="Total Hot Water Burning Time",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        device_class=SensorDeviceClass.DURATION,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement=UnitOfTime.HOURS,
-        value_fn=lambda _, state: round(state.total_hot_water_burning_time, 2)
-        if state
-        else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_HEATING_BURNING_TIMES,
-        translation_key="heating_burning_times",
-        name="Heating Burning Times",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda _, state: state.heating_burning_times if state else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_HOT_WATER_BURNING_TIMES,
-        translation_key="hot_water_burning_times",
-        name="Hot Water Burning Times",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda _, state: state.hot_water_burning_times if state else None,
+        key=ATTR_WATER_PRESSURE,
+        translation_key="water_pressure",
+        name="Water Pressure",
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPressure.BAR,
+        value_fn=lambda _, state: round(state.water_pressure, 3) if state else None,
     ),
 )
+
+
 
 
 async def async_setup_entry(
@@ -207,9 +140,6 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
             self._attr_unique_id = f"{device_id}_{description.key}"
             self._attr_name = f"Rinnai Device {description.name}"
 
-        if description.key == ATTR_BURNING_STATE:
-            self._attr_translation_key = "burning_state"
-
         self._update_attributes()
 
     @property
@@ -227,21 +157,7 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
         """Return if entity is available."""
         if not self._device or not self._device.online:
             return False
-        if self.entity_description.key in [
-            ATTR_HOT_WATER_TEMP,
-            ATTR_HEATING_TEMP_NM,
-            ATTR_HEATING_TEMP_HES,
-        ]:
-            return True
-        state = self._device_state
-        if not state:
-            return False
-
-        mode_code = state.raw_data.get("operationMode")
-        if not mode_code or mode_code not in CODE_TO_MODE:
-            return False
-
-        return True
+        return self._device_state is not None
 
     @callback
     def _handle_coordinator_update(self) -> None:

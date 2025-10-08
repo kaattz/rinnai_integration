@@ -15,7 +15,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MAX_TEMP, MIN_TEMP, TEMP_STEP
+from .const import (
+    DOMAIN,
+    MAX_TEMP,
+    MIN_TEMP,
+    TEMP_STEP,
+)
 from .coordinator import RinnaiCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +53,9 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
         self._device_id = device_id
 
         # Only supports temperature control
-        self._attr_supported_features = WaterHeaterEntityFeature.TARGET_TEMPERATURE
+        self._attr_supported_features = (
+            WaterHeaterEntityFeature.TARGET_TEMPERATURE
+        )
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_min_temp = MIN_TEMP
         self._attr_max_temp = MAX_TEMP
@@ -106,11 +113,16 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
             _LOGGER.debug("Water heater state not available")
             return
 
+        if state.hot_water_temp_min:
+            self._attr_min_temp = state.hot_water_temp_min
+        if state.hot_water_temp_max:
+            self._attr_max_temp = state.hot_water_temp_max
+
         # Only get hot water temperature setting
         try:
             self._attr_target_temperature = state.hot_water_temp
             _LOGGER.debug(
-                "Water heater target temperature: %s°C", self._attr_target_temperature
+                "Water heater target temperature: %s C", self._attr_target_temperature
             )
         except (ValueError, TypeError) as e:
             self._attr_target_temperature = 0
@@ -119,12 +131,13 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
         # Set fixed operation mode name
         self._attr_current_operation = "Hot Water"
         _LOGGER.debug(
-            "Water heater operation mode set to: %s", self._attr_current_operation
+            "Water heater operation mode set to: %s",
+            self._attr_current_operation,
         )
 
         # Log complete device information to help debugging
         _LOGGER.debug(
-            "Water heater complete info - Name: %s, Model: %s, Online: %s, Temp: %s°C",
+            "Water heater complete info - Name: %s, Model: %s, Online: %s, Temp: %s C",
             device.device_name,
             device.device_type,
             device.online,
@@ -150,7 +163,7 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
         # Set hot water temperature
         hex_temperature = hex(temperature)[2:].upper()
         command = {"hotWaterTempSetting": hex_temperature}
-        _LOGGER.debug("Setting hot water temperature to %s°C", temperature)
+        _LOGGER.debug("Setting hot water temperature to %s C", temperature)
 
         # Send command and update status
         success = await self.coordinator.async_send_command(self._device_id, command)

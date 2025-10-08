@@ -6,100 +6,65 @@
         "error": {
             "cannot_connect": "连接失败",
             "invalid_auth": "身份验证无效",
-            "unknown": "意外错误"
+            "unknown": "未知错误"
         },
         "step": {
             "user": {
                 "data": {
-                    "password": "密码",
-                    "username": "用户名"
+                    "username": "用户名",
+                    "password": "密码"
                 }
             }
         }
     },
     "entity": {
         "sensor": {
-            "burning_state": {
-                "name": "燃烧状态",
-                "state": {
-                    "Standby": "待机",
-                    "Heating Water": "热水加热",
-                    "Burning": "燃烧中",
-                    "Error": "错误"
-                }
-            },
-            "gas_usage": {
-                "name": "燃气用量"
-            },
-            "heating_temperature_hes": {
-                "name": "供暖温度（节能模式）"
-            },
-            "heating_temperature_nm": {
-                "name": "供暖温度（正常模式）"
-            },
             "hot_water_temperature": {
                 "name": "热水温度"
             },
-            "operation_mode": {
-                "name": "运行模式"
+            "heating_temperature": {
+                "name": "采暖温度"
             },
-            "supply_time": {
-                "name": "供水时间"
+            "burning_state_dhw": {
+                "name": "热水燃烧状态",
+                "state": {
+                    "Standby": "待机",
+                    "Heating Water": "加热",
+                    "Burning": "燃烧",
+                    "Error": "故障"
+                }
             },
-            "total_power_supply_time": {
-                "name": "总供电时间"
+            "burning_state_ch": {
+                "name": "采暖燃烧状态",
+                "state": {
+                    "Standby": "待机",
+                    "Heating Water": "加热",
+                    "Burning": "燃烧",
+                    "Error": "故障"
+                }
             },
-            "total_heating_burning_time": {
-                "name": "总加热燃烧时间"
-            },
-            "total_hot_water_burning_time": {
-                "name": "总热水燃烧时间"
-            },
-            "heating_burning_times": {
-                "name": "加热燃烧次数"
-            },
-            "hot_water_burning_times": {
-                "name": "热水燃烧次数"
+            "water_pressure": {
+                "name": "水压"
             }
         },
         "climate": {
             "rinnai": {
                 "name": "采暖控制",
                 "state": {
-                    "heat": "采暖打开",
-                    "off": "采暖关闭"
+                    "heat": "普通",
+                    "dry": "外出",
+                    "off": "关闭",
+                    "auto": "快速"
                 },
                 "state_attributes": {
                     "hvac_action": {
                         "state": {
-                            "heating": "采暖开启",
-                            "idle": "采暖关闭",
-                            "off": "采暖关闭"
-                        }
-                    },
-                    "preset_mode": {
-                        "state": {
-                            "Normal Heating": "普通模式",
-                            "Heating Energy Saving": "节能模式",
-                            "Heating Outdoor": "户外模式",
-                            "Fast Heating": "快速采暖"
+                            "heating": "采暖中",
+                            "idle": "待机",
+                            "off": "关闭"
                         }
                     }
                 }
-            }
-        },
-        "switch": {
-            "energy_saving_mode": {
-                "name": "节能模式"
-            },
-            "outdoor_mode": {
-                "name": "户外模式"
-            },
-            "rapid_heating": {
-                "name": "速热模式"
-            },
-            "summer_winter": {
-                "name": "冬夏季模式"
             }
         },
         "water_heater": {
@@ -115,6 +80,16 @@
                         }
                     }
                 }
+            }
+        },
+        "switch": {
+            "eco_mode": {
+                "name": "eco模式"
+            }
+        },
+        "select": {
+            "heating_mode": {
+                "name": "采暖模式"
             }
         }
     },
