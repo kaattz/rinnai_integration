@@ -67,8 +67,10 @@
 ---
 
 ## 效果展示
+<img width="262" height="338" alt="rinnai1" src="https://github.com/user-attachments/assets/c526019a-2300-4b03-bab5-6450aff5f549" />
+<img width="261" height="231" alt="2" src="https://github.com/user-attachments/assets/830fe418-2232-4468-b2bb-b0c24e1e4913" />
+<img width="143" height="362" alt="3" src="https://github.com/user-attachments/assets/6428cba8-d71b-41d5-a8b8-f0635f9b7a2a" />
 
-- 控制界面  
 
 
 ---
