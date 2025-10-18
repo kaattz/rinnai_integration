@@ -29,7 +29,7 @@
                 "name": "热水燃烧状态",
                 "state": {
                     "Standby": "待机",
-                    "Heating Water": "加热",
+                    "Heating Water": "燃烧",
                     "Burning": "燃烧",
                     "Error": "故障"
                 }
@@ -38,7 +38,7 @@
                 "name": "采暖燃烧状态",
                 "state": {
                     "Standby": "待机",
-                    "Heating Water": "加热",
+                    "Heating Water": "燃烧",
                     "Burning": "燃烧",
                     "Error": "故障"
                 }
