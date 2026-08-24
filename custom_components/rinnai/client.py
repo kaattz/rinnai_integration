@@ -260,12 +260,13 @@ class RinnaiClient:
         topics = {
             "inf": f"rinnai/SR/01/SR/{device_mac}/inf/",
             "stg": f"rinnai/SR/01/SR/{device_mac}/stg/",
+            "sys": f"rinnai/SR/01/SR/{device_mac}/sys/",
             "set": f"rinnai/SR/01/SR/{device_mac}/set/",
         }
 
         # Subscribe to information topics
         for topic_type, topic in topics.items():
-            if topic_type in ["inf", "stg"]:
+            if topic_type in ["inf", "stg", "sys"]:
                 # Don't subscribe to the set topic, as we only publish to it
                 @callback
                 def message_received(msg, topic_type=topic_type, device_id=device_id):
@@ -293,6 +294,29 @@ class RinnaiClient:
                             state_data = self._process_energy_data(payload)
                             if state_data:
                                 self._handle_state_update(device_id, state_data)
+
+                        elif topic_type == "sys":
+                            ptn = payload.get("ptn")
+                            if ptn == "JA3":
+                                online = payload.get("online")
+                                if online in ("1", 1, True):
+                                    self._handle_state_update(
+                                        device_id, {"_online": True}
+                                    )
+                                elif online in ("0", 0, False):
+                                    self._handle_state_update(
+                                        device_id, {"_online": False}
+                                    )
+                                else:
+                                    _LOGGER.warning(
+                                        "Invalid MQTT online state for device %s: %s",
+                                        device_id,
+                                        online,
+                                    )
+                            elif ptn == "JA4":
+                                _LOGGER.debug(
+                                    "MQTT heartbeat received for device %s", device_id
+                                )
                     except json.JSONDecodeError:
                         _LOGGER.error("Invalid JSON in MQTT message: %s", msg.payload)
                     except (ValueError, TypeError, KeyError) as err:

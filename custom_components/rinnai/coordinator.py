@@ -280,6 +280,8 @@ class RinnaiCoordinator(DataUpdateCoordinator):
                         _LOGGER.warning(
                             "Failed to fetch state for device: %s", device_id
                         )
+                    else:
+                        self._last_http_update[device_id] = time.time()
 
                 self._first_update = False
 
@@ -323,10 +325,37 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         }
 
     @callback
-    def _handle_client_state_update(self, device_id: str, _: dict[str, Any]) -> None:
+    def _handle_client_state_update(
+        self, device_id: str, state_data: dict[str, Any]
+    ) -> None:
         """Handle state updates pushed from the client."""
+        device = self._devices.get(device_id)
+        if device:
+            if "_online" in state_data:
+                device.online = self._coerce_online_status(state_data["_online"])
+                self.async_set_updated_data(self.data)
+                return
+            if state_data and not device.online:
+                _LOGGER.info(
+                    "Device %s is sending MQTT updates, marking online", device_id
+                )
+                device.online = True
+
         self._process_device_states()
         self.async_set_updated_data(self.data)
+
+    @staticmethod
+    def _coerce_online_status(value: Any) -> bool:
+        """Convert MQTT online markers into a boolean."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "online", "on"}:
+                return True
+            if normalized in {"0", "false", "offline", "off"}:
+                return False
+        return bool(value)
 
     def _process_devices_data(self) -> None:
         """Process devices data from client into structured format."""

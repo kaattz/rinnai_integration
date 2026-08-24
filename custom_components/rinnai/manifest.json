@@ -10,5 +10,5 @@
   "iot_class": "cloud_push",
   "quality_scale": "bronze",
   "requirements": ["paho-mqtt>=1.6.1"],
-  "version": "v1.0.3"
+  "version": "1.0.6"
 }

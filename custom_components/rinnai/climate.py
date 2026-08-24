@@ -99,6 +99,8 @@ class RinnaiHeatingClimateEntity(CoordinatorEntity, ClimateEntity):
 
     def _update_attributes(self) -> None:
         """Update entity attributes based on coordinator data."""
+        self._set_safe_off_attributes()
+
         device = self._device
         if not device:
             self._attr_available = False
@@ -166,6 +168,14 @@ class RinnaiHeatingClimateEntity(CoordinatorEntity, ClimateEntity):
             self._attr_target_temperature,
             self._attr_hvac_mode,
         )
+
+    def _set_safe_off_attributes(self) -> None:
+        """Set required climate state attributes before any early return."""
+        self._current_mode = "standby"
+        self._attr_hvac_mode = HVACMode.OFF
+        self._attr_hvac_action = HVACAction.OFF
+        self._attr_preset_mode = None
+        self._attr_extra_state_attributes = None
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
