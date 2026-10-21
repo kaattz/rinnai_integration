@@ -98,8 +98,8 @@ class RinnaiAuthChangesTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await client.login())
 
-        # Credentials travel in the POST body, not the query string.
-        self.assertEqual(session.calls[0]["method"], "POST")
+        # The API only accepts these credentials as GET query parameters.
+        self.assertEqual(session.calls[0]["method"], "GET")
         self.assertEqual(session.calls[0]["params"]["appVersion"], "3.9.0")
 
     async def test_login_failure_clears_cached_token(self):
@@ -128,9 +128,10 @@ class RinnaiAuthChangesTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await client.fetch_device_state("device-1"))
         self.assertEqual(client._token, "fresh-token")
+        # GET (rejected) -> GET login -> GET retry
         self.assertEqual(
             [call["method"] for call in session.calls],
-            ["GET", "POST", "GET"],
+            ["GET", "GET", "GET"],
         )
 
     async def test_protected_http_requests_use_basic_authorization(self):

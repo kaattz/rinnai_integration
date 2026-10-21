@@ -146,10 +146,12 @@ class RinnaiClient:
                         "identityLevel": "0",
                     }
 
-                    # POST keeps the credential hash out of URLs, proxies and logs.
-                    response = await self._session.post(
+                    # The Rinnai API only accepts these credentials as query
+                    # parameters on GET, so a POST body (which would keep the
+                    # password hash out of URLs) is rejected with "Unknown error".
+                    response = await self._session.get(
                         LOGIN_URL,
-                        data=login_data,
+                        params=login_data,
                         headers={"Content-Type": "application/json"},
                     )
 

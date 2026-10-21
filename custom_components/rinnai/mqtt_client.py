@@ -47,14 +47,9 @@ class RinnaiMQTTClient:
         self._reconnect_attempt = 0
 
         self.client.username_pw_set(self.username, self.password)
-        self.client.tls_set(
-            ca_certs=None,
-            certfile=None,
-            keyfile=None,
-            cert_reqs=ssl.CERT_NONE,
-            tls_version=ssl.PROTOCOL_TLSv1_2,
-            ciphers=None,
-        )
+        # TLS setup loads the system CA bundle, which is a blocking call, so it
+        # is deferred to async_connect() where it can run in an executor.
+        self._tls_ready = False
 
         _LOGGER.debug(
             "MQTT client initialized: host=%s, port=%s, username=%s, client_id=%s",
@@ -63,6 +58,25 @@ class RinnaiMQTTClient:
             self.username,
             self.client_id,
         )
+
+    def _configure_tls(self) -> bool:
+        """Apply TLS settings. Must not run on the event loop."""
+        if self._tls_ready:
+            return True
+        try:
+            self.client.tls_set(
+                ca_certs=None,
+                certfile=None,
+                keyfile=None,
+                cert_reqs=ssl.CERT_NONE,
+                tls_version=ssl.PROTOCOL_TLSv1_2,
+                ciphers=None,
+            )
+        except (OSError, ssl.SSLError, ValueError) as err:
+            _LOGGER.error("Failed to configure MQTT TLS: %s", err)
+            return False
+        self._tls_ready = True
+        return True
 
     def _build_client(self) -> mqtt.Client:
         """Create a paho client across 1.x and 2.x APIs."""
@@ -124,6 +138,8 @@ class RinnaiMQTTClient:
                 _LOGGER.info(
                     "Connecting to MQTT broker at %s:%s", RINNAI_HOST, RINNAI_PORT
                 )
+                if not await self.hass.async_add_executor_job(self._configure_tls):
+                    return False
                 await self.hass.async_add_executor_job(
                     self.client.connect, RINNAI_HOST, RINNAI_PORT, 60
                 )
