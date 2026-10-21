@@ -46,26 +46,17 @@
             "water_pressure": {
                 "name": "水压"
             },
-            "heating_outlet_water_temp": {
-                "name": "采暖出水温度"
-            },
-            "heating_return_water_temp": {
-                "name": "采暖回水温度"
-            },
-            "hot_water_outlet_water_temp": {
-                "name": "热水出水温度"
-            },
-            "room_temperature": {
-                "name": "室内温度"
-            },
             "hot_water_flow": {
                 "name": "热水流量"
             },
             "gas_consumption": {
                 "name": "耗气量"
             },
-            "cumulative_running_time": {
-                "name": "累计运行时长"
+            "heating_burning_time": {
+                "name": "采暖累计燃烧时长"
+            },
+            "hot_water_burning_time": {
+                "name": "热水累计燃烧时长"
             },
             "fault_code": {
                 "name": "故障代码"

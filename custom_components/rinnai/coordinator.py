@@ -20,7 +20,6 @@ from .const import (
     HTTP_BACKOFF,
     HTTP_REFRESH_INTERVAL,
     parse_hex_int,
-    parse_hex_temp,
     parse_reb_operation_mode,
     parse_switch_flag,
 )
@@ -77,24 +76,16 @@ class RinnaiDeviceState:
     heating_temp_max: int = 0
     eco_mode: bool | None = None
 
-    # --- Measured water temperatures -----------------------------------------
-    # These are *measured* values, distinct from the *_temp settings above.
-    # The appliance carries dedicated sensors (fault codes 353 / 363) but the
-    # official app never renders them for the REB-*FF-CH (GBoiler) family, so
-    # whether the cloud actually reports these keys must be verified from the
-    # raw payload. None means "not reported", never "0 C".
-    heating_outlet_water_temp: float | None = None
-    heating_return_water_temp: float | None = None
-    hot_water_outlet_water_temp: float | None = None
-    room_temperature: float | None = None
-
     # --- Other reported telemetry --------------------------------------------
     hot_water_flow: float | None = None
-    gas_consumption: float | None = None
+    gas_consumption: int | None = None
     fault_code: str = ""
     error_code: str = ""
     error_type: str = ""
-    cumulative_running_time: int | None = None
+    # Cumulative burning time counters, reported as raw hex. These only appear
+    # while the corresponding burner is active.
+    heating_burning_time: int | None = None
+    hot_water_burning_time: int | None = None
     operation_mode_raw: str = ""
 
     # Raw data from device
@@ -113,15 +104,11 @@ class RinnaiDeviceState:
         "hotWaterTempBound": ("hot_water_temp_bound_raw", None),
         "heatingTempBound": ("heating_temp_bound_raw", None),
         "ecoMode": ("eco_mode", parse_switch_flag),
-        # Measured temperatures (hex encoded, may be absent on this family).
-        "heatingOutletWaterTemp": ("heating_outlet_water_temp", parse_hex_temp),
-        "returnWaterTemp": ("heating_return_water_temp", parse_hex_temp),
-        "hotWaterOutletWaterTemp": ("hot_water_outlet_water_temp", parse_hex_temp),
-        "roomTemperature": ("room_temperature", parse_hex_temp),
         # Telemetry.
         "hotWaterOutletWaterFlow": ("hot_water_flow", parse_hex_int),
         "gasConsumption": ("gas_consumption", parse_hex_int),
-        "cumulativeRunningTime": ("cumulative_running_time", parse_hex_int),
+        "totalHeatingBurningTime": ("heating_burning_time", parse_hex_int),
+        "totalHotWaterBurningTime": ("hot_water_burning_time", parse_hex_int),
         "faultCode": ("fault_code", None),
         "errorCode": ("error_code", None),
         "errorType": ("error_type", None),
@@ -585,14 +572,12 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             if state.water_pressure:
                 _LOGGER.debug("Water Pressure: %.3f bar", state.water_pressure)
 
-            # Measured water temperatures, when the cloud reports them.
+            # Cumulative burning time counters (only present while burning).
             for label, value in (
-                ("Heating Outlet Water Temp", state.heating_outlet_water_temp),
-                ("Heating Return Water Temp", state.heating_return_water_temp),
-                ("Hot Water Outlet Water Temp", state.hot_water_outlet_water_temp),
-                ("Room Temperature", state.room_temperature),
+                ("Total Heating Burning Time", state.heating_burning_time),
+                ("Total Hot Water Burning Time", state.hot_water_burning_time),
             ):
-                _LOGGER.debug("%s: %s C", label, value if value is not None else "n/a")
+                _LOGGER.debug("%s: %s", label, value if value is not None else "n/a")
 
             if state.fault_code or state.error_code:
                 _LOGGER.debug(

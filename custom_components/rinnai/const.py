@@ -19,15 +19,12 @@ ATTR_HEATING_TEMP: Final = "heating_temperature"
 ATTR_BURNING_STATE_DHW: Final = "burning_state_dhw"
 ATTR_BURNING_STATE_CH: Final = "burning_state_ch"
 ATTR_WATER_PRESSURE: Final = "water_pressure"
-ATTR_HEATING_OUTLET_WATER_TEMP: Final = "heating_outlet_water_temp"
-ATTR_HEATING_RETURN_WATER_TEMP: Final = "heating_return_water_temp"
-ATTR_HOT_WATER_OUTLET_WATER_TEMP: Final = "hot_water_outlet_water_temp"
-ATTR_ROOM_TEMPERATURE: Final = "room_temperature"
 ATTR_HOT_WATER_FLOW: Final = "hot_water_flow"
 ATTR_GAS_CONSUMPTION: Final = "gas_consumption"
 ATTR_FAULT_CODE: Final = "fault_code"
 ATTR_ERROR_CODE: Final = "error_code"
-ATTR_CUMULATIVE_RUNNING_TIME: Final = "cumulative_running_time"
+ATTR_HEATING_BURNING_TIME: Final = "heating_burning_time"
+ATTR_HOT_WATER_BURNING_TIME: Final = "hot_water_burning_time"
 ATTR_OPERATION_MODE_RAW: Final = "operation_mode_raw"
 ATTR_DEBUG_RAW: Final = "debug_raw"
 
@@ -274,34 +271,6 @@ def get_burning_state_ha(burning_state: str) -> str:
     return burning_state
 
 
-# Raw temperature fields reported as hex strings. The scale is not documented;
-# the official app divides by 10 for heat pump heating inlet/outlet values
-# (HeaterPumperMachineModel), so that is the default assumption here.
-HEX_TEMP_FIELDS: Final = (
-    "heatingOutletWaterTemp",
-    "returnWaterTemp",
-    "hotWaterOutletWaterTemp",
-)
-
-
-def parse_hex_temp(value: Any, divisor: float = 10.0) -> float | None:
-    """Parse a hex-encoded temperature into Celsius.
-
-    Returns None when the field is absent, blank, non-hex, or a sentinel such as
-    "0000" / "FFFF", so a missing report never looks like a real 0 C reading.
-    """
-    if value in (None, ""):
-        return None
-    try:
-        raw = int(str(value).strip(), 16) if isinstance(value, str) else int(value)
-    except (TypeError, ValueError):
-        return None
-    # 0x0000 and 0xFFFF are the usual "no reading" markers.
-    if raw in (0x0000, 0xFFFF):
-        return None
-    return round(raw / divisor, 1)
-
-
 def parse_hex_int(value: Any) -> int | None:
     """Parse a plain hex-encoded integer, tolerating decimal strings."""
     if value in (None, ""):
@@ -313,3 +282,9 @@ def parse_hex_int(value: Any) -> int | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+# The appliance reports cumulative burning time as a raw hex counter with no
+# documented unit. Observed values (04B6 = 1206) are consistent with minutes,
+# which is what the official app assumes for these counters.
+BURNING_TIME_UNIT: Final = "min"
