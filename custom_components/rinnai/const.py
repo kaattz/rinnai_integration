@@ -272,16 +272,49 @@ def get_burning_state_ha(burning_state: str) -> str:
 
 
 def parse_hex_int(value: Any) -> int | None:
-    """Parse a plain hex-encoded integer, tolerating decimal strings."""
+    """Parse an explicitly hex-encoded Rinnai counter.
+
+    Only use this for fields known to be hex. Note that a hex counter made of
+    digits alone ("0252" = 594) is indistinguishable from a decimal string, so
+    the encoding must be chosen per field rather than guessed.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value).strip(), 16)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_decimal_int(value: Any) -> int | None:
+    """Parse an explicitly decimal-encoded Rinnai value.
+
+    Timestamps and bit fields ("1792624032883", "422804") are decimal. Parsing
+    them as hex yields absurd integers that overflow HA's state conversion.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value).strip(), 10)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_auto_int(value: Any) -> int | None:
+    """Parse a counter whose encoding is not known ahead of time.
+
+    A letter means hex for certain; pure digits are treated as decimal, which
+    is right for the timestamps and bit fields this integration sees. Only use
+    this where a wrong guess is harmless.
+    """
     if value in (None, ""):
         return None
     text = str(value).strip()
-    for base in (16, 10):
-        try:
-            return int(text, base)
-        except (TypeError, ValueError):
-            continue
-    return None
+    if not text:
+        return None
+    if any(c in "abcdefABCDEF" for c in text):
+        return parse_hex_int(text)
+    return parse_decimal_int(text)
 
 
 # The appliance reports cumulative burning time as a raw hex counter with no

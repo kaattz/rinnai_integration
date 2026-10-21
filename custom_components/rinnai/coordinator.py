@@ -19,6 +19,7 @@ from .const import (
     DOMAIN,
     HTTP_BACKOFF,
     HTTP_REFRESH_INTERVAL,
+    parse_auto_int,
     parse_hex_int,
     parse_reb_operation_mode,
     parse_switch_flag,
@@ -104,9 +105,11 @@ class RinnaiDeviceState:
         "hotWaterTempBound": ("hot_water_temp_bound_raw", None),
         "heatingTempBound": ("heating_temp_bound_raw", None),
         "ecoMode": ("eco_mode", parse_switch_flag),
-        # Telemetry.
-        "hotWaterOutletWaterFlow": ("hot_water_flow", parse_hex_int),
-        "gasConsumption": ("gas_consumption", parse_hex_int),
+        # Telemetry. The burning-time counters are hex ("04B6" = 1206), which
+        # matters because a digit-only hex value like "0252" would otherwise
+        # read as 252 instead of 594.
+        "hotWaterOutletWaterFlow": ("hot_water_flow", parse_auto_int),
+        "gasConsumption": ("gas_consumption", parse_auto_int),
         "totalHeatingBurningTime": ("heating_burning_time", parse_hex_int),
         "totalHotWaterBurningTime": ("hot_water_burning_time", parse_hex_int),
         "faultCode": ("fault_code", None),
@@ -149,33 +152,33 @@ class RinnaiDeviceState:
                     )
                     continue
                 setattr(self, obj_field, converted)
-                api_data[api_field] = converted
+                # Do NOT write the converted value back into api_data. That dict
+                # is the shared raw payload and is merged across updates, so
+                # writing an int there meant the next tick re-parsed its own
+                # output: "04B6" -> 1206 -> "1206" -> 4614 -> 17940 ... until
+                # the value overflowed HA's state conversion.
             else:
                 setattr(self, obj_field, value)
 
         self._apply_derived_values()
 
     def _process_hex_values(self, api_data: dict[str, Any]) -> None:
-        """Process values that need hex conversion."""
+        """Convert hex temperature settings before the field mapping runs.
+
+        These two fields feed the *_temp attributes through the mapping below,
+        so the converted value is used locally only and never written back into
+        api_data (see the note in update_from_api_data).
+        """
         for field_name in self._hex_fields:
-            if hex_value := api_data.get(field_name):
-                try:
-                    # Ensure value is string and convert from hex
-                    if isinstance(hex_value, str):
-                        # Add more detailed logs
-                        original_value = hex_value
-                        int_value = int(hex_value, 16)
-                        api_data[field_name] = int_value
-                        _LOGGER.debug(
-                            "Converting hex value: %s: %s -> %s",
-                            field_name,
-                            original_value,
-                            int_value,
-                        )
-                except ValueError:
-                    _LOGGER.warning(
-                        "Failed to convert hex value %s: %s", field_name, hex_value
-                    )
+            hex_value = api_data.get(field_name)
+            if not hex_value or not isinstance(hex_value, str):
+                continue
+            try:
+                api_data[field_name] = int(hex_value, 16)
+            except ValueError:
+                _LOGGER.warning(
+                    "Failed to convert hex value %s: %s", field_name, hex_value
+                )
 
     def _apply_derived_values(self) -> None:
         """Update derived fields such as temperature ranges."""

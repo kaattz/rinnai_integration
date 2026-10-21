@@ -155,4 +155,4 @@ class RinnaiAuthChangesTest(unittest.IsolatedAsyncioTestCase):
         manifest_path = ROOT / "custom_components" / "rinnai" / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "1.0.9")
+        self.assertEqual(manifest["version"], "1.1.0")

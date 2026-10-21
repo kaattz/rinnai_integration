@@ -41,6 +41,22 @@ from .coordinator import RinnaiCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+# A debug attribute must never break state writing. Very large integers cannot
+# even be converted to str() under Python's 4300-digit limit, and a value like
+# that in an attribute used to raise on every coordinator tick.
+_MAX_ATTR_CHARS: Final = 200
+
+
+def _safe_str(value: Any) -> str:
+    """Stringify a raw payload value without ever raising."""
+    try:
+        text = str(value)
+    except (ValueError, OverflowError):
+        return "<unrepresentable>"
+    if len(text) > _MAX_ATTR_CHARS:
+        return f"{text[:_MAX_ATTR_CHARS]}... ({len(text)} chars)"
+    return text
+
 
 @dataclass
 class RinnaiSensorEntityDescription(SensorEntityDescription):
@@ -257,5 +273,5 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
                 "device_id": self._device_id,
                 "raw_field_count": len(raw),
                 "raw_fields": sorted(raw),
-                "raw_values": {k: str(v) for k, v in sorted(raw.items())},
+                "raw_values": {k: _safe_str(v) for k, v in sorted(raw.items())},
             }
