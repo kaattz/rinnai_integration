@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -12,11 +13,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
-    ECO_MODE_OFF_VALUE,
-    ECO_MODE_ON_VALUE,
+    ECO_MODE_TOGGLE_VALUE,
     parse_switch_flag,
 )
 from .coordinator import RinnaiCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -77,13 +79,33 @@ class RinnaiEcoModeSwitch(CoordinatorEntity[RinnaiCoordinator], SwitchEntity):
         await self._set_eco_mode(False)
 
     async def _set_eco_mode(self, enable: bool) -> None:
-        command = {"ecoMode": ECO_MODE_ON_VALUE if enable else ECO_MODE_OFF_VALUE}
-        if await self.coordinator.async_send_command(self._device_id, command):
-            state = self.coordinator.get_device_state(self._device_id)
-            if state:
-                state.eco_mode = enable
-                state.raw_data["ecoMode"] = ECO_MODE_ON_VALUE if enable else ECO_MODE_OFF_VALUE
-            self.async_write_ha_state()
+        """Drive eco mode through the appliance's toggle semantics.
+
+        ecoMode is a *toggle* field: publishing "31" flips whatever the current
+        state is, and there is no separate on/off level (the official app does
+        the same through DataPusher.option()). So we only publish when the
+        current state differs from the request, then let the device reply set
+        the authoritative value.
+        """
+        state = self.coordinator.get_device_state(self._device_id)
+        if state is not None and state.eco_mode is not None:
+            if bool(state.eco_mode) == enable:
+                _LOGGER.debug(
+                    "Eco mode already %s for %s", enable, self._device_id
+                )
+                return
+
+        command = {"ecoMode": ECO_MODE_TOGGLE_VALUE}
+        if not await self.coordinator.async_send_command(self._device_id, command):
+            _LOGGER.warning("Failed to toggle eco mode for %s", self._device_id)
+            return
+
+        # Optimistic update: the device confirmation arrives over MQTT shortly.
+        state = self.coordinator.get_device_state(self._device_id)
+        if state is not None:
+            state.eco_mode = enable
+            state.raw_data["ecoMode"] = ECO_MODE_TOGGLE_VALUE
+        self.async_write_ha_state()
 
     @property
     def device_info(self) -> dict[str, Any] | None:

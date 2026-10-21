@@ -59,9 +59,16 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     if not devices:
         raise CannotConnect("No devices found")
 
-    # Use the first device's name as the title
+    # Use the first device's name as the title. The API reports "name"; the old
+    # "deviceName" lookup never matched and fell back to a generic title.
     device_id = next(iter(devices))
-    title = devices[device_id].get("deviceName", "Rinnai Water Heater")
+    device = devices[device_id]
+    title = (
+        device.get("name")
+        or device.get("deviceName")
+        or device.get("deviceType")
+        or "Rinnai Device"
+    )
 
     # Clean up client
     await client.async_close()
@@ -124,8 +131,7 @@ class RinnaiOptionsFlowHandler(OptionsFlow):
                 default=self.config_entry.options.get(
                     CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),
-            vol.Optional(
+            ): vol.All(vol.Coerce(int), vol.Range(min=60, max=3600)),            vol.Optional(
                 CONF_CONNECT_TIMEOUT,
                 default=self.config_entry.options.get(
                     CONF_CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT

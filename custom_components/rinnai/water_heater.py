@@ -61,8 +61,7 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
         self._attr_max_temp = MAX_TEMP
         self._attr_target_temperature_step = TEMP_STEP
 
-        # No longer supports operation mode list, but needs to set default current operation mode
-        self._attr_operation_list = []
+        # OPERATION_MODE is not advertised, so set the reported operation only.
         self._attr_current_operation = "Hot Water"
 
         # Use has_entity_name flag to enable proper translation

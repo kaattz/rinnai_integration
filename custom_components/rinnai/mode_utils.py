@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .const import CODE_TO_MODE, HEATING_MODES
+from .const import CODE_TO_MODE, HEATING_MODES, TOGGLE_SETTLE_DELAY
 
 if TYPE_CHECKING:  # pragma: no cover
     from .coordinator import RinnaiCoordinator
@@ -22,7 +22,8 @@ async def async_apply_heating_mode(
         _LOGGER.warning("Unknown heating mode requested: %s", target_mode_key)
         return False
 
-    await coordinator.async_request_refresh()
+    # Use the cached state. A forced refresh here would cost a cloud request on
+    # every user action; MQTT push keeps the cache current.
     state = coordinator.get_device_state(device_id)
     if not state:
         _LOGGER.warning("No state available for device %s", device_id)
@@ -92,7 +93,8 @@ async def async_apply_heating_mode(
         if not success:
             _LOGGER.warning("Failed to execute heating mode command: %s", command)
             return False
-        await asyncio.sleep(0)
+        # Give the appliance time to apply and re-report the bitfield. Firing
+        # several toggles back to back makes the firmware drop some of them.
+        await asyncio.sleep(TOGGLE_SETTLE_DELAY)
 
-    await coordinator.async_request_refresh()
     return True

@@ -76,8 +76,9 @@ class FakeMQTTClient:
         self.username = username
         self.password = password
 
-    def tls_set(self, *args):
-        return None
+    def tls_set(self, *args, **kwargs):
+        self.tls_args = args
+        self.tls_kwargs = kwargs
 
     def connect(self, host, port, keepalive):
         self.on_connect(self, None, None, 0)

@@ -13,7 +13,17 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import RinnaiClient
-from .const import BURNING_STATES, CODE_TO_MODE, DOMAIN, parse_reb_operation_mode, parse_switch_flag
+from .const import (
+    BURNING_STATES,
+    CODE_TO_MODE,
+    DOMAIN,
+    HTTP_BACKOFF,
+    HTTP_REFRESH_INTERVAL,
+    parse_hex_int,
+    parse_hex_temp,
+    parse_reb_operation_mode,
+    parse_switch_flag,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,6 +77,26 @@ class RinnaiDeviceState:
     heating_temp_max: int = 0
     eco_mode: bool | None = None
 
+    # --- Measured water temperatures -----------------------------------------
+    # These are *measured* values, distinct from the *_temp settings above.
+    # The appliance carries dedicated sensors (fault codes 353 / 363) but the
+    # official app never renders them for the REB-*FF-CH (GBoiler) family, so
+    # whether the cloud actually reports these keys must be verified from the
+    # raw payload. None means "not reported", never "0 C".
+    heating_outlet_water_temp: float | None = None
+    heating_return_water_temp: float | None = None
+    hot_water_outlet_water_temp: float | None = None
+    room_temperature: float | None = None
+
+    # --- Other reported telemetry --------------------------------------------
+    hot_water_flow: float | None = None
+    gas_consumption: float | None = None
+    fault_code: str = ""
+    error_code: str = ""
+    error_type: str = ""
+    cumulative_running_time: int | None = None
+    operation_mode_raw: str = ""
+
     # Raw data from device
     raw_data: dict[str, Any] = field(default_factory=dict)
 
@@ -83,6 +113,18 @@ class RinnaiDeviceState:
         "hotWaterTempBound": ("hot_water_temp_bound_raw", None),
         "heatingTempBound": ("heating_temp_bound_raw", None),
         "ecoMode": ("eco_mode", parse_switch_flag),
+        # Measured temperatures (hex encoded, may be absent on this family).
+        "heatingOutletWaterTemp": ("heating_outlet_water_temp", parse_hex_temp),
+        "returnWaterTemp": ("heating_return_water_temp", parse_hex_temp),
+        "hotWaterOutletWaterTemp": ("hot_water_outlet_water_temp", parse_hex_temp),
+        "roomTemperature": ("room_temperature", parse_hex_temp),
+        # Telemetry.
+        "hotWaterOutletWaterFlow": ("hot_water_flow", parse_hex_int),
+        "gasConsumption": ("gas_consumption", parse_hex_int),
+        "cumulativeRunningTime": ("cumulative_running_time", parse_hex_int),
+        "faultCode": ("fault_code", None),
+        "errorCode": ("error_code", None),
+        "errorType": ("error_type", None),
     }
 
     # List of fields that need hex conversion
@@ -162,11 +204,14 @@ class RinnaiDeviceState:
         if operation_raw not in (None, ""):
             if isinstance(operation_raw, str):
                 self.raw_data["operationModeRaw"] = operation_raw
+                self.operation_mode_raw = operation_raw
             else:
                 try:
-                    self.raw_data["operationModeRaw"] = f"{int(operation_raw):06X}"
+                    formatted = f"{int(operation_raw):06X}"
                 except (TypeError, ValueError):
-                    self.raw_data["operationModeRaw"] = str(operation_raw)
+                    formatted = str(operation_raw)
+                self.raw_data["operationModeRaw"] = formatted
+                self.operation_mode_raw = formatted
         if flags:
             self.raw_data["operationModeFlags"] = flags
             if "eco_mode" in flags:
@@ -253,7 +298,37 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         self._first_update = True
         self._devices: dict[str, RinnaiDevice] = {}
         self._last_http_update: dict[str, float] = {}
+        # Consecutive failed HTTP polls per device, used to widen the backoff.
+        self._http_fail_count: dict[str, int] = {}
         self.data = {"devices": {}, "device_states": {}}
+
+    def _record_http_success(self, device_id: str, now: float) -> None:
+        """Reset the backoff counter after a successful poll."""
+        self._last_http_update[device_id] = now
+        self._http_fail_count.pop(device_id, None)
+
+    def _record_http_failure(self, device_id: str, now: float) -> None:
+        """Widen the interval so a broken auth never degenerates into a tight loop.
+
+        Without this, a failed poll leaves the previous success timestamp in
+        place, so every coordinator tick retries immediately. With a 300 s tick
+        that is ~288 failing requests per day, which is exactly the pattern that
+        looks abusive to the cloud service.
+        """
+        failures = self._http_fail_count.get(device_id, 0) + 1
+        self._http_fail_count[device_id] = failures
+        delay = HTTP_BACKOFF[min(failures - 1, len(HTTP_BACKOFF) - 1)]
+        self._last_http_update[device_id] = now - HTTP_REFRESH_INTERVAL + delay
+        _LOGGER.debug(
+            "HTTP poll for %s failed %s time(s); next attempt in %ss",
+            device_id,
+            failures,
+            delay,
+        )
+
+    def _should_poll(self, device_id: str, now: float) -> bool:
+        """Return True when the HTTP backfill for this device is due."""
+        return self._last_http_update.get(device_id, 0) < now - HTTP_REFRESH_INTERVAL
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Update data via API."""
@@ -268,6 +343,8 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             if not await self.client.login():
                 handle_error("Failed to login to Rinnai API")
 
+            now = time.time()
+
             # Only fetch devices during first update or when devices list is empty
             if self._first_update or not self.client.devices:
                 _LOGGER.debug("Performing initial/full HTTP update for devices")
@@ -276,12 +353,13 @@ class RinnaiCoordinator(DataUpdateCoordinator):
 
                 for device_id in self.client.devices:
                     _LOGGER.debug("Fetching initial state for device: %s", device_id)
-                    if not await self.client.fetch_device_state(device_id):
+                    if await self.client.fetch_device_state(device_id):
+                        self._record_http_success(device_id, now)
+                    else:
                         _LOGGER.warning(
                             "Failed to fetch state for device: %s", device_id
                         )
-                    else:
-                        self._last_http_update[device_id] = time.time()
+                        self._record_http_failure(device_id, now)
 
                 self._first_update = False
 
@@ -290,19 +368,16 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.debug("Skipping HTTP device fetch, using MQTT data only")
 
-                current_time = time.time()
                 for device_id in self.client.devices:
                     device_state = self.client.device_states.get(device_id, {})
-                    if (
-                        not device_state
-                        or getattr(self, "_last_http_update", {}).get(device_id, 0)
-                        < current_time - 3600
-                    ):
+                    if not device_state or self._should_poll(device_id, now):
                         _LOGGER.debug(
                             "Fetching HTTP state update for device: %s", device_id
                         )
                         if await self.client.fetch_device_state(device_id):
-                            self._last_http_update[device_id] = current_time
+                            self._record_http_success(device_id, now)
+                        else:
+                            self._record_http_failure(device_id, now)
 
                 # MQTT updates happen independently in the client through subscriptions
                 # Process any state updates from MQTT
@@ -455,54 +530,78 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         return device.state if device else None
 
     def _log_device_states(self) -> None:
-        """Log detailed state information for all devices."""
+        """Log detailed state information for all devices.
+
+        Runs on every coordinator tick, so everything here is DEBUG only. It
+        used to log at INFO, which flooded the log every 5 minutes.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+
         for device_id, device in self._devices.items():
             state = device.state
-            _LOGGER.info("===== Device Status Sync =====")
-            _LOGGER.info(
+            _LOGGER.debug("===== Device Status Sync =====")
+            _LOGGER.debug(
                 "Device: %s (%s), Online: %s",
                 device.device_name,
                 device_id,
                 device.online,
             )
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Type: %s, Auth Code: %s",
                 device.device_type,
                 device.auth_code,
             )
 
             mode_name = CODE_TO_MODE.get(state.operation_mode, state.operation_mode)
-            _LOGGER.info("Operation Mode: %s", mode_name)
-            _LOGGER.info("Hot Water Temperature Setting: %s C", state.hot_water_temp)
-            _LOGGER.info("Heating Temperature Setting: %s C", state.heating_temp)
+            _LOGGER.debug("Operation Mode: %s", mode_name)
+            _LOGGER.debug("Hot Water Temperature Setting: %s C", state.hot_water_temp)
+            _LOGGER.debug("Heating Temperature Setting: %s C", state.heating_temp)
 
             if state.hot_water_temp_min or state.hot_water_temp_max:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Hot Water Temperature Range: %s-%s C",
                     state.hot_water_temp_min,
                     state.hot_water_temp_max,
                 )
             if state.heating_temp_min or state.heating_temp_max:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Heating Temperature Range: %s-%s C",
                     state.heating_temp_min,
                     state.heating_temp_max,
                 )
 
             if state.burning_state_dhw:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "DHW Burning State: %s",
                     BURNING_STATES.get(state.burning_state_dhw, state.burning_state_dhw),
                 )
             if state.burning_state_ch:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "CH Burning State: %s",
                     BURNING_STATES.get(state.burning_state_ch, state.burning_state_ch),
                 )
 
             if state.water_pressure:
-                _LOGGER.info("Water Pressure: %.3f bar", state.water_pressure)
+                _LOGGER.debug("Water Pressure: %.3f bar", state.water_pressure)
+
+            # Measured water temperatures, when the cloud reports them.
+            for label, value in (
+                ("Heating Outlet Water Temp", state.heating_outlet_water_temp),
+                ("Heating Return Water Temp", state.heating_return_water_temp),
+                ("Hot Water Outlet Water Temp", state.hot_water_outlet_water_temp),
+                ("Room Temperature", state.room_temperature),
+            ):
+                _LOGGER.debug("%s: %s C", label, value if value is not None else "n/a")
+
+            if state.fault_code or state.error_code:
+                _LOGGER.debug(
+                    "Fault/Error: faultCode=%s errorCode=%s errorType=%s",
+                    state.fault_code,
+                    state.error_code,
+                    state.error_type,
+                )
 
             _LOGGER.debug("Device Raw Data: %s", device.raw_data)
             _LOGGER.debug("State Raw Data: %s", state.raw_data)
-            _LOGGER.info("===========================")
+            _LOGGER.debug("===========================")

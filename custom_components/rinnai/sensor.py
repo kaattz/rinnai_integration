@@ -23,8 +23,18 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     ATTR_BURNING_STATE_CH,
     ATTR_BURNING_STATE_DHW,
+    ATTR_CUMULATIVE_RUNNING_TIME,
+    ATTR_DEBUG_RAW,
+    ATTR_FAULT_CODE,
+    ATTR_GAS_CONSUMPTION,
+    ATTR_HEATING_OUTLET_WATER_TEMP,
+    ATTR_HEATING_RETURN_WATER_TEMP,
     ATTR_HEATING_TEMP,
+    ATTR_HOT_WATER_FLOW,
+    ATTR_HOT_WATER_OUTLET_WATER_TEMP,
     ATTR_HOT_WATER_TEMP,
+    ATTR_OPERATION_MODE_RAW,
+    ATTR_ROOM_TEMPERATURE,
     ATTR_WATER_PRESSURE,
     DOMAIN,
     get_burning_state_ha,
@@ -32,6 +42,23 @@ from .const import (
 from .coordinator import RinnaiCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _temp_sensor(
+    key: str, translation_key: str, name: str, attribute: str
+) -> "RinnaiSensorEntityDescription":
+    """Build a temperature sensor backed by one RinnaiDeviceState attribute."""
+    return RinnaiSensorEntityDescription(
+        key=key,
+        translation_key=translation_key,
+        name=name,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        # None (not reported) must stay None so the entity reads "unavailable"
+        # instead of a misleading 0 C.
+        value_fn=lambda _, state: getattr(state, attribute) if state else None,
+    )
 
 
 @dataclass
@@ -86,6 +113,89 @@ SENSOR_TYPES: Final[tuple[RinnaiSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPressure.BAR,
         value_fn=lambda _, state: round(state.water_pressure, 3) if state else None,
+    ),
+    # --- Measured water temperatures -------------------------------------
+    # The appliance has dedicated sensors for these (diagnostic codes 353/363).
+    # They stay unavailable unless the cloud actually reports the field, so a
+    # "unavailable" state here is the honest answer, not a bug.
+    _temp_sensor(
+        ATTR_HEATING_OUTLET_WATER_TEMP,
+        "heating_outlet_water_temp",
+        "Heating Outlet Water Temperature",
+        "heating_outlet_water_temp",
+    ),
+    _temp_sensor(
+        ATTR_HEATING_RETURN_WATER_TEMP,
+        "heating_return_water_temp",
+        "Heating Return Water Temperature",
+        "heating_return_water_temp",
+    ),
+    _temp_sensor(
+        ATTR_HOT_WATER_OUTLET_WATER_TEMP,
+        "hot_water_outlet_water_temp",
+        "Hot Water Outlet Temperature",
+        "hot_water_outlet_water_temp",
+    ),
+    _temp_sensor(
+        ATTR_ROOM_TEMPERATURE,
+        "room_temperature",
+        "Room Temperature",
+        "room_temperature",
+    ),
+    # --- Other telemetry --------------------------------------------------
+    RinnaiSensorEntityDescription(
+        key=ATTR_HOT_WATER_FLOW,
+        translation_key="hot_water_flow",
+        name="Hot Water Flow",
+        native_unit_of_measurement="L/min",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _, state: state.hot_water_flow if state else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_GAS_CONSUMPTION,
+        translation_key="gas_consumption",
+        name="Gas Consumption",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _, state: state.gas_consumption if state else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_CUMULATIVE_RUNNING_TIME,
+        translation_key="cumulative_running_time",
+        name="Cumulative Running Time",
+        native_unit_of_measurement="min",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _, state: state.cumulative_running_time if state else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_FAULT_CODE,
+        translation_key="fault_code",
+        name="Fault Code",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _, state: (state.fault_code or state.error_code) or None
+        if state
+        else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_OPERATION_MODE_RAW,
+        translation_key="operation_mode_raw",
+        name="Operation Mode Raw",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda _, state: state.operation_mode_raw or None if state else None,
+    ),
+    # --- Field discovery --------------------------------------------------
+    # Attaches every key the cloud actually reports to one entity. Use this to
+    # confirm whether heatingOutletWaterTemp / returnWaterTemp are present for
+    # a given model instead of guessing.
+    RinnaiSensorEntityDescription(
+        key=ATTR_DEBUG_RAW,
+        translation_key="debug_raw",
+        name="Debug Raw State",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda _, state: len(state.raw_data) if state else 0,
     ),
 )
 
@@ -174,3 +284,15 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
 
         state = self.coordinator.get_device_state(self._device_id)
         self._attr_native_value = self.entity_description.value_fn(device, state)
+
+        # Expose the full payload on the discovery entity so the exact set of
+        # fields a given model reports can be read straight from the UI.
+        if self.entity_description.key == ATTR_DEBUG_RAW:
+            raw = dict(state.raw_data) if state else {}
+            self._attr_extra_state_attributes = {
+                "device_type": device.device_type,
+                "device_id": self._device_id,
+                "raw_field_count": len(raw),
+                "raw_fields": sorted(raw),
+                "raw_values": {k: str(v) for k, v in sorted(raw.items())},
+            }

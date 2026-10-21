@@ -21,6 +21,7 @@ from .const import (
     DEVICE_DEFAULT_AUTH_CODES,
     INFO_URL,
     LOGIN_URL,
+    MIN_HTTP_REQUEST_GAP,
     PROCESS_PARAMETER_URL,
     REFESH_TIME,
 )
@@ -56,6 +57,9 @@ class RinnaiClient:
         self._lock = asyncio.Lock()
         self._last_login_time = 0
 
+        # Simple client-side rate limit so no code path can hammer the cloud.
+        self._last_request_time = 0.0
+
         # Device data storage
         self.devices: dict[str, dict[str, Any]] = {}
         self.device_states: dict[str, dict[str, Any]] = {}
@@ -71,6 +75,31 @@ class RinnaiClient:
 
         # Track initialization status
         self._initialized = False
+
+    async def _throttle(self) -> None:
+        """Keep outbound HTTP calls at least MIN_HTTP_REQUEST_GAP apart."""
+        gap = time.monotonic() - self._last_request_time
+        if gap < MIN_HTTP_REQUEST_GAP:
+            await asyncio.sleep(MIN_HTTP_REQUEST_GAP - gap)
+        self._last_request_time = time.monotonic()
+
+    def _invalidate_token(self) -> None:
+        """Drop the cached token so the next call performs a real login."""
+        if self._token is not None:
+            _LOGGER.debug("Discarding cached Rinnai token")
+        self._token = None
+        self._last_login_time = 0
+
+    @staticmethod
+    def _looks_like_auth_failure(resp_json: dict[str, Any]) -> bool:
+        """Detect an expired/invalid token so we re-login instead of retrying."""
+        code = resp_json.get("code")
+        if code in (401, 403, "401", "403"):
+            return True
+        message = str(resp_json.get("msg", "")).lower()
+        return any(
+            needle in message for needle in ("token", "login", "授权", "登录", "token失效")
+        )
 
     async def async_initialize(self) -> bool:
         """Initialize the client and fetch initial device data."""
@@ -106,6 +135,7 @@ class RinnaiClient:
                 return True
 
             try:
+                await self._throttle()
                 async with asyncio.timeout(self.connect_timeout):
                     login_data = {
                         "username": self.username,
@@ -116,22 +146,28 @@ class RinnaiClient:
                         "identityLevel": "0",
                     }
 
-                    response = await self._session.get(
+                    # POST keeps the credential hash out of URLs, proxies and logs.
+                    response = await self._session.post(
                         LOGIN_URL,
-                        params=login_data,
+                        data=login_data,
                         headers={"Content-Type": "application/json"},
                     )
 
                     resp_json = await response.json()
-                    _LOGGER.debug("Login response: %s", resp_json)
+                    _LOGGER.debug("Login accepted=%s", resp_json.get("success"))
                     if resp_json.get("success") is not True:
                         _LOGGER.error(
                             "Failed to login to Rinnai: %s",
                             resp_json.get("msg", "Unknown error"),
                         )
+                        self._invalidate_token()
                         return False
 
                     self._token = resp_json.get("data", {}).get("token")
+                    if not self._token:
+                        _LOGGER.error("Login succeeded but no token was returned")
+                        self._last_login_time = 0
+                        return False
                     self._last_login_time = time.time()
 
                     _LOGGER.debug("Logged in to Rinnai API successfully")
@@ -140,19 +176,24 @@ class RinnaiClient:
                 _LOGGER.error("Error connecting to Rinnai API: %s", err)
                 return False
 
-    async def fetch_devices(self) -> bool:
+    async def fetch_devices(self, _retry: bool = True) -> bool:
         """Fetch devices from the Rinnai API."""
         if not self._token and not await self.login():
             return False
 
         try:
+            await self._throttle()
             async with asyncio.timeout(self.connect_timeout):
                 headers = {"Authorization": f"Basic {self._token}"}
                 response = await self._session.get(INFO_URL, headers=headers)
                 resp_json = await response.json()
-                _LOGGER.debug("Get devices response: %s", resp_json)
+                _LOGGER.debug("Get devices accepted=%s", resp_json.get("success"))
 
                 if resp_json.get("success") is not True:
+                    if _retry and self._looks_like_auth_failure(resp_json):
+                        _LOGGER.debug("Device list rejected, re-authenticating once")
+                        self._invalidate_token()
+                        return await self.fetch_devices(_retry=False)
                     _LOGGER.error(
                         "Failed to get devices: %s",
                         resp_json.get("msg", "Unknown error"),
@@ -180,12 +221,13 @@ class RinnaiClient:
             _LOGGER.error("Error getting devices from Rinnai API: %s", err)
             return False
 
-    async def fetch_device_state(self, device_id: str) -> bool:
+    async def fetch_device_state(self, device_id: str, _retry: bool = True) -> bool:
         """Fetch the state of a device via HTTP API."""
         if not self._token and not await self.login():
             return False
 
         try:
+            await self._throttle()
             async with asyncio.timeout(self.connect_timeout):
                 headers = {"Authorization": f"Basic {self._token}"}
                 response = await self._session.get(
@@ -196,6 +238,12 @@ class RinnaiClient:
                 resp_json = await response.json()
 
                 if resp_json.get("success") is not True:
+                    if _retry and self._looks_like_auth_failure(resp_json):
+                        _LOGGER.debug(
+                            "State for %s rejected, re-authenticating once", device_id
+                        )
+                        self._invalidate_token()
+                        return await self.fetch_device_state(device_id, _retry=False)
                     _LOGGER.error(
                         "Failed to get device %s: %s",
                         device_id,

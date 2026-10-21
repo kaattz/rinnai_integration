@@ -25,14 +25,22 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Capture GET requests made by the client."""
+    """Capture HTTP requests made by the client."""
 
     def __init__(self, payloads):
         self._payloads = list(payloads)
         self.calls = []
 
     async def get(self, url, *, params=None, headers=None):
-        self.calls.append({"url": url, "params": params, "headers": headers})
+        self.calls.append(
+            {"method": "GET", "url": url, "params": params, "headers": headers}
+        )
+        return FakeResponse(self._payloads.pop(0))
+
+    async def post(self, url, *, data=None, headers=None):
+        self.calls.append(
+            {"method": "POST", "url": url, "params": data, "headers": headers}
+        )
         return FakeResponse(self._payloads.pop(0))
 
 
@@ -90,7 +98,40 @@ class RinnaiAuthChangesTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await client.login())
 
+        # Credentials travel in the POST body, not the query string.
+        self.assertEqual(session.calls[0]["method"], "POST")
         self.assertEqual(session.calls[0]["params"]["appVersion"], "3.9.0")
+
+    async def test_login_failure_clears_cached_token(self):
+        """An expired token must not be reused for another 24 hours."""
+        client_module = load_client_module()
+        session = FakeSession([{"success": False, "msg": "token invalid"}])
+        client = client_module.RinnaiClient(SimpleNamespace(session=session), "u", "p")
+        client._token = "stale-token"
+
+        self.assertFalse(await client.login())
+        self.assertIsNone(client._token)
+        self.assertEqual(client._last_login_time, 0)
+
+    async def test_state_request_retries_once_after_auth_failure(self):
+        """A rejected token triggers exactly one re-login and one retry."""
+        client_module = load_client_module()
+        session = FakeSession(
+            [
+                {"success": False, "code": 401, "msg": "token expired"},
+                {"success": True, "data": {"token": "fresh-token"}},
+                {"success": True, "data": {"heatingTempSetting": "3C"}},
+            ]
+        )
+        client = client_module.RinnaiClient(SimpleNamespace(session=session), "u", "p")
+        client._token = "stale-token"
+
+        self.assertTrue(await client.fetch_device_state("device-1"))
+        self.assertEqual(client._token, "fresh-token")
+        self.assertEqual(
+            [call["method"] for call in session.calls],
+            ["GET", "POST", "GET"],
+        )
 
     async def test_protected_http_requests_use_basic_authorization(self):
         client_module = load_client_module()
@@ -113,4 +154,4 @@ class RinnaiAuthChangesTest(unittest.IsolatedAsyncioTestCase):
         manifest_path = ROOT / "custom_components" / "rinnai" / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "1.0.6")
+        self.assertEqual(manifest["version"], "1.0.7")

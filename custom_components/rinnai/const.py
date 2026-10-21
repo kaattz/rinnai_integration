@@ -19,6 +19,17 @@ ATTR_HEATING_TEMP: Final = "heating_temperature"
 ATTR_BURNING_STATE_DHW: Final = "burning_state_dhw"
 ATTR_BURNING_STATE_CH: Final = "burning_state_ch"
 ATTR_WATER_PRESSURE: Final = "water_pressure"
+ATTR_HEATING_OUTLET_WATER_TEMP: Final = "heating_outlet_water_temp"
+ATTR_HEATING_RETURN_WATER_TEMP: Final = "heating_return_water_temp"
+ATTR_HOT_WATER_OUTLET_WATER_TEMP: Final = "hot_water_outlet_water_temp"
+ATTR_ROOM_TEMPERATURE: Final = "room_temperature"
+ATTR_HOT_WATER_FLOW: Final = "hot_water_flow"
+ATTR_GAS_CONSUMPTION: Final = "gas_consumption"
+ATTR_FAULT_CODE: Final = "fault_code"
+ATTR_ERROR_CODE: Final = "error_code"
+ATTR_CUMULATIVE_RUNNING_TIME: Final = "cumulative_running_time"
+ATTR_OPERATION_MODE_RAW: Final = "operation_mode_raw"
+ATTR_DEBUG_RAW: Final = "debug_raw"
 
 # Supported platforms
 PLATFORMS: Final = frozenset(["sensor", "water_heater", "climate", "switch"])
@@ -26,6 +37,23 @@ PLATFORMS: Final = frozenset(["sensor", "water_heater", "climate", "switch"])
 # Default values
 DEFAULT_UPDATE_INTERVAL: Final = 300  # seconds
 DEFAULT_CONNECT_TIMEOUT: Final = 30  # seconds
+
+# Minimum seconds between two outbound HTTP calls, guarded by the client.
+# MQTT push is the primary data path, HTTP only backfills.
+MIN_HTTP_REQUEST_GAP: Final = 3.0
+
+# HTTP backfill cadence (seconds). A successful poll refreshes the baseline;
+# a failed poll pushes the next attempt further out through HTTP_BACKOFF.
+HTTP_REFRESH_INTERVAL: Final = 3600
+HTTP_BACKOFF: Final = (3600, 10800, 21600)
+HTTP_BACKOFF_MAX: Final = HTTP_BACKOFF[-1]
+
+# Seconds to wait after publishing a toggle command before reading state back.
+# The appliance needs a moment to apply and report the new bitfield.
+TOGGLE_SETTLE_DELAY: Final = 1.5
+
+# Local HTTP API paths
+LOCAL_API_PATH_STATUS: Final = "/status"
 
 # Rinnai MQTT settings
 RINNAI_HOST: Final = "mqtt.rinnai.com.cn"
@@ -36,9 +64,16 @@ DEVICE_DEFAULT_AUTH_CODES: Final = {
     "REB": "03F2",
 }
 
-#ECO_MODE values
-ECO_MODE_ON_VALUE: Final = "31"
-ECO_MODE_OFF_VALUE: Final = "31"
+# Eco mode
+# The appliance treats "31" on *toggle* fields as "flip current state", it is not
+# a level. The official app does the same: DataPusher.option() always publishes
+# "31" for ecoMode / outdoorMode / rapidHeating and relies on the device reply.
+# So switching eco mode means: publish "31", wait, then read the real state back
+# from operationMode bit 22.
+ECO_MODE_TOGGLE_VALUE: Final = "31"
+# Kept for backwards compatibility with older call sites.
+ECO_MODE_ON_VALUE: Final = ECO_MODE_TOGGLE_VALUE
+ECO_MODE_OFF_VALUE: Final = ECO_MODE_TOGGLE_VALUE
 
 # Device type identifiers
 DEVICE_TYPE_WATER_HEATER: Final = "water_heater"
@@ -237,3 +272,44 @@ def get_burning_state_ha(burning_state: str) -> str:
         return BURNING_STATES.get(burning_state)
 
     return burning_state
+
+
+# Raw temperature fields reported as hex strings. The scale is not documented;
+# the official app divides by 10 for heat pump heating inlet/outlet values
+# (HeaterPumperMachineModel), so that is the default assumption here.
+HEX_TEMP_FIELDS: Final = (
+    "heatingOutletWaterTemp",
+    "returnWaterTemp",
+    "hotWaterOutletWaterTemp",
+)
+
+
+def parse_hex_temp(value: Any, divisor: float = 10.0) -> float | None:
+    """Parse a hex-encoded temperature into Celsius.
+
+    Returns None when the field is absent, blank, non-hex, or a sentinel such as
+    "0000" / "FFFF", so a missing report never looks like a real 0 C reading.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        raw = int(str(value).strip(), 16) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+    # 0x0000 and 0xFFFF are the usual "no reading" markers.
+    if raw in (0x0000, 0xFFFF):
+        return None
+    return round(raw / divisor, 1)
+
+
+def parse_hex_int(value: Any) -> int | None:
+    """Parse a plain hex-encoded integer, tolerating decimal strings."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for base in (16, 10):
+        try:
+            return int(text, base)
+        except (TypeError, ValueError):
+            continue
+    return None

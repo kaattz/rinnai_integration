@@ -33,6 +33,36 @@
             },
             "water_pressure": {
                 "name": "Water Pressure"
+            },
+            "heating_outlet_water_temp": {
+                "name": "Heating Outlet Water Temperature"
+            },
+            "heating_return_water_temp": {
+                "name": "Heating Return Water Temperature"
+            },
+            "hot_water_outlet_water_temp": {
+                "name": "Hot Water Outlet Temperature"
+            },
+            "room_temperature": {
+                "name": "Room Temperature"
+            },
+            "hot_water_flow": {
+                "name": "Hot Water Flow"
+            },
+            "gas_consumption": {
+                "name": "Gas Consumption"
+            },
+            "cumulative_running_time": {
+                "name": "Cumulative Running Time"
+            },
+            "fault_code": {
+                "name": "Fault Code"
+            },
+            "operation_mode_raw": {
+                "name": "Operation Mode Raw"
+            },
+            "debug_raw": {
+                "name": "Debug Raw State"
             }
         },
         "climate": {

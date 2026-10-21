@@ -2,12 +2,20 @@
 
 import asyncio
 from collections.abc import Callable
-import datetime
+import hashlib
 import logging
 import ssl
 from typing import Any
 
 import paho.mqtt.client as mqtt
+
+try:  # paho-mqtt >= 2.0 requires an explicit callback API version
+    from paho.mqtt.enums import CallbackAPIVersion
+
+    _PAHO_V2 = True
+except ImportError:  # paho-mqtt 1.x
+    CallbackAPIVersion = None  # type: ignore[assignment]
+    _PAHO_V2 = False
 
 from homeassistant.core import HomeAssistant, callback
 
@@ -26,9 +34,11 @@ class RinnaiMQTTClient:
         self.hass = hass
         self.username = f"a:rinnai:SR:01:SR:{username}"
         self.password = password
-        ts = datetime.datetime.now()
-        self.client_id = f"{self.username}:{ts.second}{ts.microsecond}"
-        self.client = mqtt.Client(client_id=self.client_id)
+        # A stable client id matters: a churning id looks like abusive behaviour
+        # to the broker and can kick the official app or ourselves offline.
+        suffix = hashlib.sha256(self.username.encode("utf-8")).hexdigest()[:8]
+        self.client_id = f"{self.username}:ha{suffix}"
+        self.client = self._build_client()
         self.connected = False
         self._subscribes = {}
         self._loop_task = None
@@ -37,24 +47,31 @@ class RinnaiMQTTClient:
         self._reconnect_attempt = 0
 
         self.client.username_pw_set(self.username, self.password)
-        self.hass.async_add_executor_job(
-            self.client.tls_set,
-            None,  # ca_certs
-            None,  # certfile
-            None,  # keyfile
-            ssl.CERT_NONE,  # cert_reqs
-            ssl.PROTOCOL_TLSv1_2,  # tls_version
-            None,  # ciphers
+        self.client.tls_set(
+            ca_certs=None,
+            certfile=None,
+            keyfile=None,
+            cert_reqs=ssl.CERT_NONE,
+            tls_version=ssl.PROTOCOL_TLSv1_2,
+            ciphers=None,
         )
 
         _LOGGER.debug(
-            "MQTT client initialized with host=%s, port=%s, username=%s, password=%s, client_id=%s",
+            "MQTT client initialized: host=%s, port=%s, username=%s, client_id=%s",
             RINNAI_HOST,
             RINNAI_PORT,
             self.username,
-            self.password,
             self.client_id,
         )
+
+    def _build_client(self) -> mqtt.Client:
+        """Create a paho client across 1.x and 2.x APIs."""
+        if _PAHO_V2:
+            return mqtt.Client(
+                callback_api_version=CallbackAPIVersion.VERSION1,
+                client_id=self.client_id,
+            )
+        return mqtt.Client(client_id=self.client_id)
 
     async def async_connect(self) -> bool:
         """Connect to the Rinnai MQTT broker."""
@@ -121,7 +138,7 @@ class RinnaiMQTTClient:
                     if i == 9 and not self.connected:
                         _LOGGER.warning("MQTT connection timeout after 5 seconds")
 
-            except (ValueError, TypeError, KeyError) as err:
+            except (OSError, ssl.SSLError, ValueError, TypeError, KeyError) as err:
                 _LOGGER.error("Error connecting to Rinnai MQTT broker: %s", err)
                 return False
             return self.connected
@@ -191,7 +208,7 @@ class RinnaiMQTTClient:
                 self.client.publish, topic, payload, qos
             )
 
-        except (ValueError, TypeError, KeyError) as err:
+        except (OSError, ValueError, TypeError, KeyError) as err:
             _LOGGER.error("Error publishing to Rinnai MQTT broker: %s", err)
             return False
         return result.rc == mqtt.MQTT_ERR_SUCCESS
@@ -210,7 +227,7 @@ class RinnaiMQTTClient:
 
         try:
             await self.hass.async_add_executor_job(self.client.subscribe, topic, qos)
-        except (ValueError, TypeError, KeyError) as err:
+        except (OSError, ValueError, TypeError, KeyError) as err:
             _LOGGER.error("Error subscribing to topic %s: %s", topic, err)
             return lambda: None
 

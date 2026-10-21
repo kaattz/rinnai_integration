@@ -65,10 +65,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: RinnaiConfigEntry) -> bo
     # Store the coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    # Apply option changes without requiring a restart.
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     # Set up all supported platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when its options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: RinnaiConfigEntry) -> bool:

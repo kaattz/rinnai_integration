@@ -192,8 +192,8 @@ class RinnaiHeatingClimateEntity(CoordinatorEntity, ClimateEntity):
                 self.max_temp,
             )
             return
-        # froce update data
-        await self.coordinator.async_request_refresh()
+        # Read the cached state instead of forcing a cloud round-trip. MQTT push
+        # already keeps it current, and every extra refresh is a wasted request.
         state = self._device_state
         if state and state.operation_mode:
             self._current_mode = state.operation_mode
