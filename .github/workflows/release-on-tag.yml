@@ -1,9 +1,19 @@
 name: Release on Tag
 
+# NOTE: this repository is a fork. GitHub does not run workflows on tag pushes
+# in forks by default, so this workflow stays idle until Actions is enabled in
+# Settings -> Actions -> General. workflow_dispatch is provided so a release can
+# be rebuilt by hand once Actions is enabled.
 on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)publish, e.g. v1.0.7'
+        required: true
+        type: string
 
 jobs:
   build-and-release:
@@ -13,14 +23,22 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Get tag name
+    - name: Resolve tag name
       id: tag
-      run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          TAG_NAME="${{ inputs.tag }}"
+        else
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+        fi
+        echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+        echo "Resolved tag: ${TAG_NAME}"
 
     - name: Zip project
       run: |
         zip -r "${{ steps.tag.outputs.TAG_NAME }}.zip" . \
-          -x ".git/*" "*.zip" ".github/*"
+          -x ".git/*" "*.zip" ".github/*" \
+             "*/__pycache__/*" "*.pyc" ".pytest_cache/*"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
