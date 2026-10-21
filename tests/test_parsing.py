@@ -84,7 +84,8 @@ class CoordinatorConversionTest(unittest.TestCase):
 
         for name in ("homeassistant", "homeassistant.core",
                      "homeassistant.exceptions", "homeassistant.helpers",
-                     "homeassistant.helpers.update_coordinator"):
+                     "homeassistant.helpers.update_coordinator",
+                     "homeassistant.util", "homeassistant.util.dt"):
             sys.modules.setdefault(name, ModuleType(name))
 
         core = sys.modules["homeassistant.core"]
@@ -94,6 +95,8 @@ class CoordinatorConversionTest(unittest.TestCase):
         exc.HomeAssistantError = Exception
         uc = sys.modules["homeassistant.helpers.update_coordinator"]
         uc.DataUpdateCoordinator = object
+        dt_module = sys.modules["homeassistant.util.dt"]
+        dt_module.now = lambda: __import__("datetime").datetime.now()
 
         # client.py pulls in aiohttp and the MQTT client; stub them so only the
         # state model is exercised.
@@ -150,19 +153,15 @@ class CoordinatorConversionTest(unittest.TestCase):
         )
 
     def test_other_counters_are_stable_across_updates(self):
-        """Same guard for the hot water counter and the flow value."""
+        """Same guard for the hot water burning counter."""
         module = self._load_state_class()
         state = module.RinnaiDeviceState()
-        shared_payload = {
-            "totalHotWaterBurningTime": "0252",
-            "hotWaterOutletWaterFlow": "069A",
-        }
+        shared_payload = {"totalHotWaterBurningTime": "0252"}
 
         for _ in range(4):
             state.update_from_api_data(shared_payload)
 
         self.assertEqual(state.hot_water_burning_time, 594)
-        self.assertEqual(state.hot_water_flow, 1690)
 
     def test_raw_payload_keeps_original_string(self):
         module = self._load_state_class()

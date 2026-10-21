@@ -206,11 +206,16 @@ def load_coordinator_module():
     exceptions.HomeAssistantError = RuntimeError
     update_coordinator = ModuleType("homeassistant.helpers.update_coordinator")
     update_coordinator.DataUpdateCoordinator = object
+    util = ModuleType("homeassistant.util")
+    util_dt = ModuleType("homeassistant.util.dt")
+    util_dt.now = lambda: __import__("datetime").datetime.now()
     sys.modules["homeassistant"] = ModuleType("homeassistant")
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.exceptions"] = exceptions
     sys.modules["homeassistant.helpers"] = ModuleType("homeassistant.helpers")
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
+    sys.modules["homeassistant.util"] = util
+    sys.modules["homeassistant.util.dt"] = util_dt
 
     client_module = ModuleType(f"{PACKAGE_NAME}.client")
     client_module.RinnaiClient = object

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+import asyncio
 import logging
 import time
 from typing import Any, ClassVar
@@ -11,15 +12,20 @@ from typing import Any, ClassVar
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .client import RinnaiClient
 from .const import (
     BURNING_STATES,
     CODE_TO_MODE,
     DOMAIN,
+    GAS_BACKOFF,
+    GAS_DATE_TYPE_DAY,
+    GAS_DATE_TYPE_MONTH,
+    GAS_REQUEST_SPACING,
+    GAS_REFRESH_INTERVAL,
     HTTP_BACKOFF,
     HTTP_REFRESH_INTERVAL,
-    parse_auto_int,
     parse_hex_int,
     parse_reb_operation_mode,
     parse_switch_flag,
@@ -78,8 +84,6 @@ class RinnaiDeviceState:
     eco_mode: bool | None = None
 
     # --- Other reported telemetry --------------------------------------------
-    hot_water_flow: float | None = None
-    gas_consumption: int | None = None
     fault_code: str = ""
     error_code: str = ""
     error_type: str = ""
@@ -88,6 +92,15 @@ class RinnaiDeviceState:
     heating_burning_time: int | None = None
     hot_water_burning_time: int | None = None
     operation_mode_raw: str = ""
+
+    # Gas consumption in m3, from the separate gasWaterConsumption endpoint
+    # rather than the device state payload. Today is derived from the monthly
+    # series so it costs no extra request.
+    gas_today: float | None = None
+    gas_month: float | None = None
+    gas_year: float | None = None
+    gas_daily: list[float | None] = field(default_factory=list)
+    gas_monthly: list[float | None] = field(default_factory=list)
 
     # Raw data from device
     raw_data: dict[str, Any] = field(default_factory=dict)
@@ -105,11 +118,9 @@ class RinnaiDeviceState:
         "hotWaterTempBound": ("hot_water_temp_bound_raw", None),
         "heatingTempBound": ("heating_temp_bound_raw", None),
         "ecoMode": ("eco_mode", parse_switch_flag),
-        # Telemetry. The burning-time counters are hex ("04B6" = 1206), which
-        # matters because a digit-only hex value like "0252" would otherwise
-        # read as 252 instead of 594.
-        "hotWaterOutletWaterFlow": ("hot_water_flow", parse_auto_int),
-        "gasConsumption": ("gas_consumption", parse_auto_int),
+        # Cumulative burning time counters, hex encoded ("04B6" = 1206). A
+        # digit-only hex value like "0252" would read as 252 if parsed as
+        # decimal, so the encoding is fixed per field.
         "totalHeatingBurningTime": ("heating_burning_time", parse_hex_int),
         "totalHotWaterBurningTime": ("hot_water_burning_time", parse_hex_int),
         "faultCode": ("fault_code", None),
@@ -290,7 +301,74 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         self._last_http_update: dict[str, float] = {}
         # Consecutive failed HTTP polls per device, used to widen the backoff.
         self._http_fail_count: dict[str, int] = {}
+        # Gas consumption is fetched on its own, much slower schedule.
+        self._last_gas_update: dict[str, float] = {}
+        self._gas_fail_count: dict[str, int] = {}
         self.data = {"devices": {}, "device_states": {}}
+
+    def _gas_is_due(self, device_id: str, now: float) -> bool:
+        """Return True when the daily gas consumption fetch is due."""
+        return (
+            self._last_gas_update.get(device_id, 0) < now - GAS_REFRESH_INTERVAL
+        )
+
+    async def _refresh_gas_consumption(self, device_id: str, now: float) -> None:
+        """Refresh monthly and yearly gas figures at most once a day.
+
+        Two requests per day in total. The daily series arrives as part of the
+        monthly reply, so "today" costs nothing extra.
+        """
+        local_now = dt_util.now()
+        month_key = local_now.strftime("%Y-%m")
+        year_key = local_now.strftime("%Y")
+
+        state = self._devices.get(device_id)
+        month_data = await self.client.fetch_gas_consumption(
+            device_id, month_key, GAS_DATE_TYPE_DAY
+        )
+        await asyncio.sleep(GAS_REQUEST_SPACING)
+        year_data = await self.client.fetch_gas_consumption(
+            device_id, year_key, GAS_DATE_TYPE_MONTH
+        )
+
+        if month_data is None and year_data is None:
+            failures = self._gas_fail_count.get(device_id, 0) + 1
+            self._gas_fail_count[device_id] = failures
+            delay = GAS_BACKOFF[min(failures - 1, len(GAS_BACKOFF) - 1)]
+            self._last_gas_update[device_id] = now - GAS_REFRESH_INTERVAL + delay
+            _LOGGER.debug(
+                "Gas consumption failed %s time(s) for %s; retry in %ss",
+                failures,
+                device_id,
+                delay,
+            )
+            return
+
+        self._gas_fail_count.pop(device_id, None)
+        self._last_gas_update[device_id] = now
+
+        if state is None:
+            return
+
+        if month_data is not None:
+            state.state.gas_month = month_data["total"]
+            state.state.gas_daily = month_data["consumption"]
+            # "Today" is the last reported day in the current month.
+            today_slot = local_now.day - 1
+            daily = month_data["consumption"]
+            if 0 <= today_slot < len(daily):
+                state.state.gas_today = daily[today_slot]
+        if year_data is not None:
+            state.state.gas_year = year_data["total"]
+            state.state.gas_monthly = year_data["consumption"]
+
+        _LOGGER.debug(
+            "Gas for %s: today=%s month=%s year=%s",
+            device_id,
+            state.state.gas_today,
+            state.state.gas_month,
+            state.state.gas_year,
+        )
 
     def _record_http_success(self, device_id: str, now: float) -> None:
         """Reset the backoff counter after a successful poll."""
@@ -355,6 +433,11 @@ class RinnaiCoordinator(DataUpdateCoordinator):
 
                 # Process initial device data
                 self._process_devices_data()
+
+                # One gas fetch at startup so the sensors are populated without
+                # waiting a full day for the first scheduled refresh.
+                for device_id in self.client.devices:
+                    await self._refresh_gas_consumption(device_id, now)
             else:
                 _LOGGER.debug("Skipping HTTP device fetch, using MQTT data only")
 
@@ -372,6 +455,12 @@ class RinnaiCoordinator(DataUpdateCoordinator):
                 # MQTT updates happen independently in the client through subscriptions
                 # Process any state updates from MQTT
                 self._process_device_states()
+
+                # Gas consumption runs on its own daily schedule, two requests
+                # per day, deliberately decoupled from the hourly state poll.
+                for device_id in self.client.devices:
+                    if self._gas_is_due(device_id, now):
+                        await self._refresh_gas_consumption(device_id, now)
 
             self._log_device_states()
 

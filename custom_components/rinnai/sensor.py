@@ -25,11 +25,12 @@ from .const import (
     ATTR_BURNING_STATE_DHW,
     ATTR_DEBUG_RAW,
     ATTR_FAULT_CODE,
-    ATTR_GAS_CONSUMPTION,
+    ATTR_GAS_CONSUMPTION_MONTH,
+    ATTR_GAS_CONSUMPTION_TODAY,
+    ATTR_GAS_CONSUMPTION_YEAR,
     ATTR_HEATING_BURNING_TIME,
     ATTR_HEATING_TEMP,
     ATTR_HOT_WATER_BURNING_TIME,
-    ATTR_HOT_WATER_FLOW,
     ATTR_HOT_WATER_TEMP,
     ATTR_OPERATION_MODE_RAW,
     ATTR_WATER_PRESSURE,
@@ -112,23 +113,6 @@ SENSOR_TYPES: Final[tuple[RinnaiSensorEntityDescription, ...]] = (
         value_fn=lambda _, state: round(state.water_pressure, 3) if state else None,
     ),
     # --- Other telemetry --------------------------------------------------
-    RinnaiSensorEntityDescription(
-        key=ATTR_HOT_WATER_FLOW,
-        translation_key="hot_water_flow",
-        name="Hot Water Flow",
-        native_unit_of_measurement="L/min",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda _, state: state.hot_water_flow if state else None,
-    ),
-    RinnaiSensorEntityDescription(
-        key=ATTR_GAS_CONSUMPTION,
-        translation_key="gas_consumption",
-        name="Gas Consumption",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda _, state: state.gas_consumption if state else None,
-    ),
     # Cumulative burning time counters. Only reported while the corresponding
     # burner runs, so they read unavailable when idle.
     RinnaiSensorEntityDescription(
@@ -148,6 +132,35 @@ SENSOR_TYPES: Final[tuple[RinnaiSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda _, state: state.hot_water_burning_time if state else None,
+    ),
+    # Gas consumption, from the separate gasWaterConsumption endpoint. Values
+    # are cubic metres, refreshed once a day rather than with the state poll.
+    RinnaiSensorEntityDescription(
+        key=ATTR_GAS_CONSUMPTION_TODAY,
+        translation_key="gas_consumption_today",
+        name="Gas Consumption Today",
+        native_unit_of_measurement="m³",
+        device_class=SensorDeviceClass.GAS,
+        state_class=SensorStateClass.TOTAL,
+        value_fn=lambda _, state: state.gas_today if state else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_GAS_CONSUMPTION_MONTH,
+        translation_key="gas_consumption_month",
+        name="Gas Consumption This Month",
+        native_unit_of_measurement="m³",
+        device_class=SensorDeviceClass.GAS,
+        state_class=SensorStateClass.TOTAL,
+        value_fn=lambda _, state: state.gas_month if state else None,
+    ),
+    RinnaiSensorEntityDescription(
+        key=ATTR_GAS_CONSUMPTION_YEAR,
+        translation_key="gas_consumption_year",
+        name="Gas Consumption This Year",
+        native_unit_of_measurement="m³",
+        device_class=SensorDeviceClass.GAS,
+        state_class=SensorStateClass.TOTAL,
+        value_fn=lambda _, state: state.gas_year if state else None,
     ),
     RinnaiSensorEntityDescription(
         key=ATTR_FAULT_CODE,

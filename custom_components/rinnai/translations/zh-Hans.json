@@ -46,12 +46,6 @@
             "water_pressure": {
                 "name": "水压"
             },
-            "hot_water_flow": {
-                "name": "热水流量"
-            },
-            "gas_consumption": {
-                "name": "耗气量"
-            },
             "heating_burning_time": {
                 "name": "采暖累计燃烧时长"
             },
@@ -66,6 +60,15 @@
             },
             "debug_raw": {
                 "name": "调试原始数据"
+            },
+            "gas_consumption_today": {
+                "name": "今日耗气量"
+            },
+            "gas_consumption_month": {
+                "name": "本月耗气量"
+            },
+            "gas_consumption_year": {
+                "name": "本年耗气量"
             }
         },
         "climate": {

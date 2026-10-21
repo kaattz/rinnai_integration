@@ -34,12 +34,6 @@
             "water_pressure": {
                 "name": "Water Pressure"
             },
-            "hot_water_flow": {
-                "name": "Hot Water Flow"
-            },
-            "gas_consumption": {
-                "name": "Gas Consumption"
-            },
             "heating_burning_time": {
                 "name": "Total Heating Burning Time"
             },
@@ -54,6 +48,15 @@
             },
             "debug_raw": {
                 "name": "Debug Raw State"
+            },
+            "gas_consumption_today": {
+                "name": "Gas Consumption Today"
+            },
+            "gas_consumption_month": {
+                "name": "Gas Consumption This Month"
+            },
+            "gas_consumption_year": {
+                "name": "Gas Consumption This Year"
             }
         },
         "climate": {

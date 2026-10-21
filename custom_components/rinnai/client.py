@@ -24,6 +24,9 @@ from .const import (
     MIN_HTTP_REQUEST_GAP,
     PROCESS_PARAMETER_URL,
     REFESH_TIME,
+    GAS_CONSUMPTION_URL,
+    GAS_SEARCH_GAS,
+    to_float,
 )
 from .mqtt_client import RinnaiMQTTClient
 
@@ -264,6 +267,60 @@ class RinnaiClient:
             _LOGGER.error("Error setting parameter: %s", err)
             return False
 
+    async def fetch_gas_consumption(
+        self, device_id: str, date: str, date_type: int, _retry: bool = True
+    ) -> dict[str, Any] | None:
+        """Fetch gas consumption for one period.
+
+        This is a separate endpoint from processParameter; the reading is not
+        part of the device state payload at all. Returns
+        {"total": float|None, "consumption": [float|None, ...]} or None.
+        """
+        if not self._token and not await self.login():
+            return None
+
+        try:
+            await self._throttle()
+            async with asyncio.timeout(self.connect_timeout):
+                headers = {"Authorization": f"Basic {self._token}"}
+                response = await self._session.post(
+                    GAS_CONSUMPTION_URL,
+                    data={
+                        "date": date,
+                        "dateType": str(date_type),
+                        "deviceId": device_id,
+                        "searchType": str(GAS_SEARCH_GAS),
+                    },
+                    headers=headers,
+                )
+                resp_json = await response.json()
+
+                if resp_json.get("success") is not True:
+                    if _retry and self._looks_like_auth_failure(resp_json):
+                        self._invalidate_token()
+                        return await self.fetch_gas_consumption(
+                            device_id, date, date_type, _retry=False
+                        )
+                    _LOGGER.debug(
+                        "Gas consumption unavailable for %s (%s): %s",
+                        device_id,
+                        date,
+                        resp_json.get("msg", "no data"),
+                    )
+                    return None
+
+                data = resp_json.get("data") or {}
+                return {
+                    "total": to_float(data.get("total")),
+                    "consumption": [
+                        to_float(v) for v in (data.get("consumption") or [])
+                    ],
+                }
+
+        except (TimeoutError, aiohttp.ClientError) as err:
+            _LOGGER.error("Error fetching gas consumption: %s", err)
+            return None
+
     @callback
     def _handle_state_update(self, device_id: str, state_data: dict[str, Any]) -> None:
         """Handle state updates from MQTT."""
@@ -335,12 +392,13 @@ class RinnaiClient:
                             if state_data:
                                 self._handle_state_update(device_id, state_data)
 
-                        # Process energy data message
-                        elif (
-                            topic_type == "stg"
-                            and payload.get("egy")
-                            and payload.get("ptn") == "J05"
-                        ):
+                        # Energy/statistics messages. Kept as a passive hook: on
+                        # the REB-*FF-CH family the stg topic only ever carries a
+                        # J03 acknowledgement, so this branch never fires. The
+                        # handler is retained so a firmware that does report
+                        # reading data would still be picked up.
+                        elif topic_type == "stg" and payload.get("egy"):
+                            _LOGGER.debug("Energy payload on stg topic: %s", payload)
                             state_data = self._process_energy_data(payload)
                             if state_data:
                                 self._handle_state_update(device_id, state_data)
@@ -396,25 +454,22 @@ class RinnaiClient:
         return state_data
 
     def _process_energy_data(self, parsed_data: dict[str, Any]) -> dict[str, Any]:
-        """Extract energy data from MQTT message without formatting."""
-        updates = {}
+        """Extract statistics from an energy message, if a firmware sends one.
+
+        On the REB-*FF-CH family the stg topic only carries a J03 ack, so this
+        normally returns nothing. Only counters that the state model actually
+        understands are forwarded; forwarding an unknown key would silently do
+        nothing while looking supported.
+        """
+        updates: dict[str, Any] = {}
 
         for param in parsed_data.get("egy", []):
             if not isinstance(param, dict):
-                _LOGGER.warning("Skipping invalid parameter: %s", param)
                 continue
-
-            if gas_value := param.get("gasConsumption"):
-                updates["gasConsumption"] = gas_value
-
-            for key in [
-                "totalPowerSupplyTime",
-                "actualUseTime",
+            for key in (
                 "totalHeatingBurningTime",
                 "totalHotWaterBurningTime",
-                "heatingBurningTimes",
-                "hotWaterBurningTimes",
-            ]:
+            ):
                 if key in param:
                     updates[key] = param[key]
 
