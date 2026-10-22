@@ -47,6 +47,7 @@ class RinnaiEcoModeSwitch(CoordinatorEntity[RinnaiCoordinator], SwitchEntity):
         super().__init__(coordinator)
         self._device_id = device_id
         self._attr_unique_id = f"{device_id}_eco_mode_switch"
+        self._attr_suggested_object_id = f"{DOMAIN}_eco_mode"
 
     @property
     def available(self) -> bool:

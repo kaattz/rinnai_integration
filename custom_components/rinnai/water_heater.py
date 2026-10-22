@@ -93,6 +93,7 @@ class RinnaiWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
             _LOGGER.debug("Water heater device not available")
             return
         self._attr_unique_id = f"{self._device_id}_water_heater"
+        self._attr_suggested_object_id = f"{DOMAIN}_water_heater"
         self._attr_translation_key = "rinnai"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},

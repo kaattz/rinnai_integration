@@ -50,6 +50,7 @@ class RinnaiHeatingModeSelect(CoordinatorEntity[RinnaiCoordinator], SelectEntity
         super().__init__(coordinator)
         self._device_id = device_id
         self._attr_unique_id = f"{device_id}_heating_mode"
+        self._attr_suggested_object_id = f"{DOMAIN}_heating_mode"
         self._attr_options = list(MODE_DISPLAY_TO_KEY.keys())
 
     @property

@@ -227,10 +227,13 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._device_id = device_id
+        # Force a stable "rinnai_" prefix instead of letting HA derive the
+        # entity_id from the (user-renamable) device name.
+        self._attr_suggested_object_id = f"{DOMAIN}_{description.key}"
+        self._attr_unique_id = f"{device_id}_{description.key}"
 
         device = coordinator.get_device(device_id)
         if device:
-            self._attr_unique_id = f"{device_id}_{description.key}"
             self._attr_has_entity_name = True
             self._attr_device_info = {
                 "identifiers": {(DOMAIN, device_id)},
@@ -239,7 +242,6 @@ class RinnaiSensor(CoordinatorEntity, SensorEntity):
                 "model": device.device_type,
             }
         else:
-            self._attr_unique_id = f"{device_id}_{description.key}"
             self._attr_name = f"Rinnai Device {description.name}"
 
         self._update_attributes()

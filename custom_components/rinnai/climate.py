@@ -108,6 +108,7 @@ class RinnaiHeatingClimateEntity(CoordinatorEntity, ClimateEntity):
             return
 
         self._attr_unique_id = f"{self._device_id}_climate"
+        self._attr_suggested_object_id = f"{DOMAIN}_heating_control"
         self._attr_translation_key = "rinnai"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
