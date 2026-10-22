@@ -49,10 +49,21 @@ HTTP_BACKOFF_MAX: Final = HTTP_BACKOFF[-1]
 # Gas consumption is aggregated per day upstream, so polling it hourly would
 # send identical requests 24 times for the same answer. Once a day is plenty and
 # keeps the account well clear of any rate limiting.
-GAS_REFRESH_INTERVAL: Final = 86400
 GAS_BACKOFF: Final = (86400, 172800, 604800)
 # Small delay between the month and year requests so the two calls never burst.
 GAS_REQUEST_SPACING: Final = 5.0
+
+# Preferred local time for the daily gas fetch, "HH:MM".
+#
+# The upstream series settles at local midnight: yesterday's slot already holds
+# its final value just after 00:00, and today's slot accumulates during the day.
+# Fetching at a fixed early-morning time gives a stable, reproducible schedule
+# instead of drifting with whatever hour Home Assistant last restarted at.
+# 04:10 keeps a margin past midnight in case the upstream roll-over is delayed.
+GAS_FETCH_TIME: Final = "04:10"
+# How long after GAS_FETCH_TIME a missed run is still caught up, so a restart at
+# 05:00 does not skip the day.
+GAS_FETCH_CATCHUP: Final = 6 * 3600
 
 # Seconds to wait after publishing a toggle command before reading state back.
 # The appliance needs a moment to apply and report the new bitfield.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import datetime
 from datetime import timedelta
 import asyncio
 import logging
@@ -23,7 +24,8 @@ from .const import (
     GAS_DATE_TYPE_DAY,
     GAS_DATE_TYPE_MONTH,
     GAS_REQUEST_SPACING,
-    GAS_REFRESH_INTERVAL,
+    GAS_FETCH_CATCHUP,
+    GAS_FETCH_TIME,
     HTTP_BACKOFF,
     HTTP_REFRESH_INTERVAL,
     parse_hex_int,
@@ -302,15 +304,71 @@ class RinnaiCoordinator(DataUpdateCoordinator):
         # Consecutive failed HTTP polls per device, used to widen the backoff.
         self._http_fail_count: dict[str, int] = {}
         # Gas consumption is fetched on its own, much slower schedule.
+        # _last_gas_update holds the window-start timestamp that was last
+        # satisfied, so one successful run covers that whole window.
         self._last_gas_update: dict[str, float] = {}
         self._gas_fail_count: dict[str, int] = {}
         self.data = {"devices": {}, "device_states": {}}
 
-    def _gas_is_due(self, device_id: str, now: float) -> bool:
-        """Return True when the daily gas consumption fetch is due."""
-        return (
-            self._last_gas_update.get(device_id, 0) < now - GAS_REFRESH_INTERVAL
+    def _gas_window_start(self, local_now: datetime.datetime) -> datetime.datetime:
+        """Return the window whose gas data should be fetched at this moment.
+
+        Returns the most recent fetch time that is currently actionable:
+
+        * after GAS_FETCH_TIME (within the catch-up grace): today's time
+        * after the grace has passed: tomorrow's time, so a missed morning is
+          not retried all day
+        * before GAS_FETCH_TIME: today's time only if it is still within the
+          grace of yesterday's, i.e. yesterday was missed; otherwise this
+          returns today's upcoming time, whose timestamp is in the future and
+          therefore never satisfies a "last run" comparison.
+        """
+        try:
+            hour, minute = (int(part) for part in GAS_FETCH_TIME.split(":"))
+        except (ValueError, AttributeError):
+            hour, minute = 4, 10
+
+        today_target = local_now.replace(
+            hour=hour, minute=minute, second=0, microsecond=0
         )
+        grace = timedelta(seconds=GAS_FETCH_CATCHUP)
+
+        if local_now >= today_target:
+            if (local_now - today_target) > grace:
+                return today_target + timedelta(days=1)
+            return today_target
+
+        # Before today's fetch time. The previous window is yesterday's; if it
+        # was missed (we are still inside its grace period) catch it up now.
+        yesterday_target = today_target - timedelta(days=1)
+        if (local_now - yesterday_target) <= grace:
+            return yesterday_target
+        return today_target
+
+    def _gas_is_due(self, device_id: str, now: float) -> bool:
+        """Return True when the daily gas fetch should run.
+
+        The run happens at a fixed local time rather than on a rolling 24-hour
+        cycle, so the hour does not drift with restarts. A window that is still
+        in the future is never due; a missed window is caught up within
+        GAS_FETCH_CATCHUP and then skipped until the next day.
+        """
+        local_now = dt_util.now()
+        window = self._gas_window_start(local_now)
+
+        # A window that has not arrived yet is never due, otherwise the
+        # upcoming fetch time would compare as "newer than the last run".
+        if window > local_now:
+            return False
+
+        if self._last_gas_update.get(device_id, 0) >= window.timestamp():
+            return False
+
+        failures = self._gas_fail_count.get(device_id, 0)
+        if failures:
+            delay = GAS_BACKOFF[min(failures - 1, len(GAS_BACKOFF) - 1)]
+            return now >= window.timestamp() + delay
+        return True
 
     async def _refresh_gas_consumption(self, device_id: str, now: float) -> None:
         """Refresh monthly and yearly gas figures at most once a day.
@@ -335,9 +393,8 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             failures = self._gas_fail_count.get(device_id, 0) + 1
             self._gas_fail_count[device_id] = failures
             delay = GAS_BACKOFF[min(failures - 1, len(GAS_BACKOFF) - 1)]
-            self._last_gas_update[device_id] = now - GAS_REFRESH_INTERVAL + delay
             _LOGGER.debug(
-                "Gas consumption failed %s time(s) for %s; retry in %ss",
+                "Gas consumption failed %s time(s) for %s; retry after %ss",
                 failures,
                 device_id,
                 delay,
@@ -345,7 +402,8 @@ class RinnaiCoordinator(DataUpdateCoordinator):
             return
 
         self._gas_fail_count.pop(device_id, None)
-        self._last_gas_update[device_id] = now
+        # Mark this window as satisfied so the next run waits for the next one.
+        self._last_gas_update[device_id] = self._gas_window_start(local_now).timestamp()
 
         if state is None:
             return
