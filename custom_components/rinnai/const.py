@@ -170,22 +170,28 @@ def parse_switch_flag(value: Any) -> bool:
         return int(value) != 0
     return bool(value)
 REB_OPERATION_MODE_FLAGS: Final = {
-    "heating_enabled": 0x010000,   # bit16, app checkBit(op, 0)
-    "hot_water_enabled": 0x020000,  # bit17, app checkBit(op, 1)
-    "one_key": 0x100000,           # bit20, app checkBit(op, 4) 一键循环
-    "standard_mode": 0x200000,     # bit21, app checkBit(op, 5) 标准模式
-    "eco_mode": 0x400000,          # bit22, app checkBit(op, 6) 节能
-    "outdoor_mode": 0x800000,      # bit23, app checkBit(op, 7) 外出模式
-    "rapid_heating": 0x1000000,    # bit24, app checkBit(op, 8) 快速采暖
+    "heating_enabled": 0x010000,   # bit16 采暖开关
+    "hot_water_enabled": 0x020000,  # bit17 热水开关
+    "one_key": 0x100000,           # bit20 一键循环
+    "standard_mode": 0x200000,     # bit21 标准模式
+    "eco_mode": 0x400000,          # bit22 节能
+    "outdoor_mode": 0x800000,      # bit23 外出模式
+    "rapid_heating": 0x000100,     # bit8  快速采暖
 }
 
 def parse_reb_operation_mode(value: str | int | None) -> tuple[str, dict[str, bool]]:
     """Parse REB operationMode value into mode key and flag mapping.
 
-    Bit positions mirror the app's GBuilderExKt.checkBit(op, n) helper, where
-    toLocation() shifts indices 0-7 to bits 16-23. rapid_heating is the
-    exception: the app calls checkBit(op, 8), and toLocation leaves 8 as-is, so
-    that flag lives at bit 24 (0x01000000) and not at bit 8 (0x00000100).
+    The bit positions were confirmed against live device readings rather than
+    inferred from the app's helper, because checkBit's toLocation() mapping is
+    easy to misread:
+
+        standby       42280C   eco
+        normal heat   432804   heat + eco
+        outdoor       C32800   heat + outdoor + eco
+        rapid heat    432904   heat + rapid + eco
+
+    normal vs rapid differ by exactly 0x000100, so rapid_heating is bit 8.
     """
     if value in (None, ""):
         return "standby", {}

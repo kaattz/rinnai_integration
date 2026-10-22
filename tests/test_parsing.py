@@ -60,6 +60,52 @@ class RinnaiValueParsingTest(unittest.TestCase):
         self.assertEqual(len(str(parsed)), 13)
 
 
+class OperationModeDecodingTest(unittest.TestCase):
+    """Bit positions confirmed against live readings, not app helpers.
+
+    Values captured from a REB-A2747FF-CH while switching modes in Home
+    Assistant. These pin the encoding so a refactor cannot silently break
+    mode detection again -- rapid_heating was previously mapped to bit 24
+    (0x01000000), which never matched this hardware.
+    """
+
+    MODES = {
+        "42280C": ("standby", set()),
+        "432804": ("normal", {"heating_enabled"}),
+        "C32800": ("outdoor", {"heating_enabled", "outdoor_mode"}),
+        "432904": ("rapid", {"heating_enabled", "rapid_heating"}),
+    }
+
+    def setUp(self):
+        self.const = load_const_module()
+
+    def test_mode_keys(self):
+        for raw, (expected_mode, _) in self.MODES.items():
+            mode, _flags = self.const.parse_reb_operation_mode(raw)
+            self.assertEqual(mode, expected_mode, f"operationMode {raw}")
+
+    def test_expected_flags_are_set(self):
+        for raw, (_mode, expected_flags) in self.MODES.items():
+            _mode, flags = self.const.parse_reb_operation_mode(raw)
+            for name in expected_flags:
+                self.assertTrue(flags.get(name), f"{raw} should set {name}")
+
+    def test_rapid_heating_is_bit_8(self):
+        """Normal 432804 and rapid 432904 differ by exactly 0x000100."""
+        normal = int("432804", 16)
+        rapid = int("432904", 16)
+        self.assertEqual(normal ^ rapid, self.const.REB_OPERATION_MODE_FLAGS["rapid_heating"])
+
+    def test_outdoor_and_rapid_are_not_confused(self):
+        _m, outdoor_flags = self.const.parse_reb_operation_mode("C32800")
+        self.assertTrue(outdoor_flags["outdoor_mode"])
+        self.assertFalse(outdoor_flags["rapid_heating"])
+
+        _m, rapid_flags = self.const.parse_reb_operation_mode("432904")
+        self.assertTrue(rapid_flags["rapid_heating"])
+        self.assertFalse(rapid_flags["outdoor_mode"])
+
+
 class CoordinatorConversionTest(unittest.TestCase):
     """Converting a value must not mutate the shared raw payload.
 
