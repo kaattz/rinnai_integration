@@ -202,19 +202,26 @@ class RinnaiDeviceState:
         if bounds:
             self.heating_temp_min, self.heating_temp_max = bounds
 
-        operation_raw = self.raw_data.get("operationMode", self.operation_mode)
-        mode_key, flags = parse_reb_operation_mode(operation_raw)
-        if operation_raw not in (None, ""):
-            if isinstance(operation_raw, str):
-                self.raw_data["operationModeRaw"] = operation_raw
-                self.operation_mode_raw = operation_raw
-            else:
-                try:
-                    formatted = f"{int(operation_raw):06X}"
-                except (TypeError, ValueError):
-                    formatted = str(operation_raw)
-                self.raw_data["operationModeRaw"] = formatted
-                self.operation_mode_raw = formatted
+        # Only the raw payload can describe the current mode. Partial MQTT
+        # pushes omit operationMode, and the previous code fell back to
+        # self.operation_mode (a mode name like "standby"), which is not a
+        # bitfield and made the entity collapse to "unknown".
+        operation_raw = self.raw_data.get("operationMode")
+        if operation_raw in (None, ""):
+            # Nothing new arrived: keep the last known value and flags.
+            return
+
+        if isinstance(operation_raw, str):
+            formatted = operation_raw
+        else:
+            try:
+                formatted = f"{int(operation_raw):06X}"
+            except (TypeError, ValueError):
+                return
+        self.raw_data["operationModeRaw"] = formatted
+        self.operation_mode_raw = formatted
+
+        mode_key, flags = parse_reb_operation_mode(formatted)
         if flags:
             self.raw_data["operationModeFlags"] = flags
             if "eco_mode" in flags:
